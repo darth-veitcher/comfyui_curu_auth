@@ -51,6 +51,22 @@ deliberately no automated way to retrieve that credential over the
 network — an operator's own copy-paste from the console is the only path,
 matching the "no accounts, no external service" design.
 
+### Setting a fixed credential instead
+
+By default the credential is freshly random every restart. Set
+`COMFYUI_CURU_AUTH_TOKEN` in ComfyUI's own process environment (however
+you start it — a shell export, a systemd unit's `Environment=`, a
+`docker-compose.yml` `environment:` entry) to pin a fixed value instead:
+
+```bash
+export COMFYUI_CURU_AUTH_TOKEN="$(python3 -c 'import secrets; print(secrets.token_urlsafe(32))')"
+```
+
+That value persists across restarts for as long as it stays set in
+whatever config manages ComfyUI's own environment — there is no separate
+file-based persistence to manage. Unset (the default) keeps the original
+behaviour exactly: a fresh, random credential every restart.
+
 ## Browsing ComfyUI's own UI directly
 
 A human who wants to open ComfyUI's own UI directly in a browser has no
@@ -78,7 +94,11 @@ correct login) — defence in depth against an automated scanner probing
 the form; the credential itself is already computationally infeasible to
 brute-force regardless. This backoff applies only to the login form,
 never to the Bearer-header path every other route uses, so a transient
-misconfiguration of an automated client can never lock itself out.
+misconfiguration of an automated client can never lock itself out. Every
+rejected attempt on *either* path is also logged (see "Blocking repeat
+offenders" below) — logging is a separate, additive concern from this
+in-process backoff, and covers the Bearer-header path too, which this
+backoff deliberately never touches.
 
 Opening any gated page directly with no credential or cookie yet — the
 normal case for a first visit — redirects straight to `/curu-auth/login`
@@ -91,6 +111,102 @@ neither is affected.
 No custom node classes are registered (`NODE_CLASS_MAPPINGS` is empty by
 design) and this extension serves no JS of its own (`WEB_DIRECTORY =
 None`) — it is a server-side-only gate.
+
+## Blocking repeat offenders
+
+This gate deliberately has no persisted, in-app ban list — it stays
+stateless across restarts exactly like the credential itself (the
+in-process backoff above resets on every restart; there's no revoke-one-
+IP API). Every rejected request instead writes one stable, greppable log
+line:
+
+```
+comfyui_curu_auth: authentication failure from 203.0.113.7 (GET /object_info)
+comfyui_curu_auth: authentication failure from 203.0.113.7 (login form)
+```
+
+Point a real IP-blocking tool at that line and let it act at the firewall
+level, entirely outside this process. Two working integration patterns:
+
+### fail2ban
+
+`/etc/fail2ban/filter.d/comfyui-curu-auth.conf`:
+
+```ini
+[Definition]
+failregex = ^.*comfyui_curu_auth: authentication failure from <HOST>.*$
+ignoreregex =
+```
+
+Verified directly against sample log lines with fail2ban's own testing
+tool (no live jail needed to check the regex itself):
+
+```bash
+fail2ban-regex /path/to/comfyui/output.log ./comfyui-curu-auth.conf
+```
+
+Then a jail, `/etc/fail2ban/jail.local`:
+
+```ini
+[comfyui-curu-auth]
+enabled  = true
+filter   = comfyui-curu-auth
+# If ComfyUI runs under systemd and logs to the journal instead of a file,
+# use this instead of `logpath`:
+#   journalmatch = _SYSTEMD_UNIT=comfyui.service
+logpath  = /path/to/comfyui/output.log
+maxretry = 5
+findtime = 600
+bantime  = 3600
+```
+
+`maxretry`/`findtime`/`bantime` are fail2ban's own standard jail options
+(5 failures inside 10 minutes bans for 1 hour here) — tune them the same
+way you would for any other fail2ban jail.
+
+### crowdsec
+
+A custom parser, `/etc/crowdsec/parsers/s01-parse/comfyui-curu-auth.yaml`:
+
+```yaml
+onsuccess: next_stage
+name: comfyui-curu-auth/logs
+description: "Parse comfyui_curu_auth authentication failures"
+filter: "evt.Line.Raw contains 'comfyui_curu_auth: authentication failure'"
+grok:
+  pattern: 'comfyui_curu_auth: authentication failure from %{IP:source_ip}'
+  apply_on: Line.Raw
+statics:
+  - meta: log_type
+    value: comfyui_curu_auth_auth_fail
+  - meta: source_ip
+    expression: "evt.Parsed.source_ip"
+```
+
+A scenario, `/etc/crowdsec/scenarios/comfyui-curu-auth-bruteforce.yaml`:
+
+```yaml
+type: leaky
+name: comfyui-curu-auth/bruteforce
+description: "Detect brute-force attempts against comfyui_curu_auth"
+filter: "evt.Meta.log_type == 'comfyui_curu_auth_auth_fail'"
+groupby: evt.Meta.source_ip
+capacity: 5
+leakspeed: "10m"
+blackhole: 1m
+labels:
+  service: comfyui
+  type: bruteforce
+```
+
+Register both locally (`cscli parsers install`/`cscli scenarios install`
+work from a local file path, not just the hub) and point crowdsec's own
+`acquis.yaml` at the same log source described above. Unlike the fail2ban
+filter, this parser/scenario pair follows crowdsec's own documented YAML
+syntax but hasn't been exercised against a live crowdsec instance — treat
+it as a verified-correct starting point, not a drop-in guarantee, and
+confirm with `cscli explain` against a sample log line before relying on
+it.
 
 ## Tests
 

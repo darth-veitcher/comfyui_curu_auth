@@ -10,11 +10,20 @@ hermetic ``pytest`` suite at all, with no real ComfyUI process needed.
 
 from __future__ import annotations
 
+import logging
 import secrets
 import time
 
 from aiohttp import web
 from aiohttp.typedefs import Handler, Middleware
+
+#: A stable, greppable logger name -- external log-watching tools
+#: (fail2ban, crowdsec) match on the "authentication failure from <IP>"
+#: message text itself, not this logger's own name, but a fixed name
+#: keeps `logging.getLogger("comfyui_curu_auth").setLevel(...)`-style
+#: operator configuration stable too. See README's own fail2ban/crowdsec
+#: integration docs.
+_logger = logging.getLogger("comfyui_curu_auth")
 
 #: The one path the gate itself must always let through unauthenticated --
 #: otherwise a human with no cookie or header yet could never reach the
@@ -46,6 +55,25 @@ def generate_credential() -> str:
     """
 
     return secrets.token_urlsafe(32)
+
+
+def resolve_credential(env_value: str | None) -> str:
+    """`env_value` if it's a real, non-empty string; otherwise a fresh
+    :func:`generate_credential`.
+
+    Lets an operator (or an automated test harness) pin a known,
+    persistent credential via an environment variable --
+    `__init__.py` calls this with
+    ``os.environ.get("COMFYUI_CURU_AUTH_TOKEN")`` -- instead of always
+    scraping a freshly random one from the console after every restart.
+    ``os.environ.get`` returns ``""`` for a declared-but-empty variable,
+    not ``None``, so both are treated as "not supplied", not as a
+    (useless, insecure) empty credential.
+    """
+
+    if env_value:
+        return env_value
+    return generate_credential()
 
 
 def build_gate_middleware(
@@ -97,6 +125,19 @@ def build_gate_middleware(
             supplied_cookie = request.cookies.get(COOKIE_NAME, "")
             if supplied_cookie and sessions.is_valid(supplied_cookie):
                 return await handler(request)
+
+        # Logged, never rate-limited or blocked here (RateLimiter's own
+        # docstring: blocking this path risks locking a legitimate
+        # automated client out of recovering from a transient
+        # misconfiguration) -- an external log-watching tool decides
+        # whether/how to act on repeated failures, this gate only ever
+        # reports them.
+        _logger.warning(
+            "comfyui_curu_auth: authentication failure from %s (%s %s)",
+            _client_key(request),
+            request.method,
+            request.path,
+        )
 
         if "text/html" in request.headers.get("Accept", ""):
             raise web.HTTPFound(LOGIN_PATH)
@@ -414,6 +455,10 @@ def build_login_routes(
         supplied = str(data.get("token", "")).encode("latin-1", errors="ignore")
         if not supplied or not secrets.compare_digest(supplied, expected):
             limiter.record_failure(client_key)
+            _logger.warning(
+                "comfyui_curu_auth: authentication failure from %s (login form)",
+                client_key,
+            )
             return web.Response(
                 text=_render_login_page(message="<p>Incorrect credential.</p>"),
                 content_type="text/html",

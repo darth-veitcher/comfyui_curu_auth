@@ -30,6 +30,8 @@ non-ComfyUI Python environment).
 
 from __future__ import annotations
 
+import os
+
 from .gate import (  # ty: ignore[unresolved-import]  # ComfyUI's own custom-
     # node loader gives this directory a real package identity
     # (submodule_search_locations) before exec'ing this file, so this
@@ -41,7 +43,7 @@ from .gate import (  # ty: ignore[unresolved-import]  # ComfyUI's own custom-
     SessionStore,
     build_gate_middleware,
     build_login_routes,
-    generate_credential,
+    resolve_credential,
 )
 
 WEB_DIRECTORY = None  # no JS of its own -- this is a server-side-only gate
@@ -56,7 +58,12 @@ except ImportError:
     server = None  # imported outside a real ComfyUI process -- nothing to wire up
 
 if server is not None:
-    _credential = generate_credential()
+    # COMFYUI_CURU_AUTH_TOKEN lets an operator (or an automated test
+    # harness) pin a known, persistent credential instead of always
+    # scraping a freshly random one from the console -- see
+    # resolve_credential's own docstring. Unset (the default) keeps prior
+    # behaviour exactly: a fresh, random credential every restart.
+    _credential = resolve_credential(os.environ.get("COMFYUI_CURU_AUTH_TOKEN"))
     print(f"comfyui-curu-auth gate active. Credential:\n  {_credential}")
     print(f"Browser login (paste the same credential above): {LOGIN_PATH}")
     _sessions = SessionStore()

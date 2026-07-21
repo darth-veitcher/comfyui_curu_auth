@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import asyncio
 
+import pytest
 from aiohttp import web
 from aiohttp.test_utils import TestClient, TestServer, make_mocked_request
 
@@ -22,6 +23,7 @@ from gate import (
     build_gate_middleware,
     build_login_routes,
     generate_credential,
+    resolve_credential,
 )
 
 # --------------------------------------------------------------------------
@@ -37,6 +39,27 @@ class TestGenerateCredential:
 
     def test_two_consecutive_calls_differ(self) -> None:
         assert generate_credential() != generate_credential()
+
+
+class TestResolveCredential:
+    """`COMFYUI_CURU_AUTH_TOKEN` (or whatever env var `__init__.py` reads)
+    lets an operator (or an automated test harness) pin a known,
+    persistent credential instead of scraping a freshly random one from
+    the console every restart."""
+
+    def test_an_empty_env_value_falls_back_to_a_generated_credential(self) -> None:
+        credential = resolve_credential(None)
+        assert isinstance(credential, str)
+        assert credential != ""
+
+    def test_a_blank_string_env_value_also_falls_back(self) -> None:
+        # os.environ.get returns "" for a declared-but-empty env var, not
+        # None -- both must fall back, not treat "" as a real credential.
+        credential = resolve_credential("")
+        assert credential != ""
+
+    def test_a_supplied_env_value_is_used_verbatim(self) -> None:
+        assert resolve_credential("fixed-test-credential") == "fixed-test-credential"
 
 
 # --------------------------------------------------------------------------
@@ -82,6 +105,48 @@ class TestBuildGateMiddleware:
             assert response.status == 200
             body = await response.json()
             assert body == {"ok": True}
+
+
+class TestFailedBearerAuthIsLogged:
+    """A clear, stable, greppable log line per rejected Bearer-header
+    request -- external log-watching tools (fail2ban, crowdsec) key off
+    this to block at the network level, entirely outside this process's
+    own control. Deliberately not rate-limited here (see `RateLimiter`'s
+    own docstring for why the Bearer-header path itself never blocks) --
+    logging is a separate, additive concern from blocking."""
+
+    async def test_a_missing_credential_logs_a_warning_naming_the_client(
+        self, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        app = web.Application(middlewares=[build_gate_middleware("expected-token")])
+        app.router.add_get("/anything", _ok_handler)
+
+        with caplog.at_level("WARNING", logger="comfyui_curu_auth"):
+            async with TestClient(TestServer(app)) as client:
+                await client.get(
+                    "/anything", headers={"X-Forwarded-For": "203.0.113.7"}
+                )
+
+        assert any(
+            "authentication failure" in r.message and "203.0.113.7" in r.message
+            for r in caplog.records
+        )
+
+    async def test_the_login_path_itself_never_logs_a_bearer_failure(
+        self, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        # LOGIN_PATH is always let through unauthenticated by design (its
+        # own docstring) -- it must never itself count as a failed Bearer
+        # attempt, or a human's own successful login flow would spuriously
+        # trip external log-watching tools on every single visit.
+        app = web.Application(middlewares=[build_gate_middleware("expected-token")])
+        app.router.add_get(LOGIN_PATH, _ok_handler)
+
+        with caplog.at_level("WARNING", logger="comfyui_curu_auth"):
+            async with TestClient(TestServer(app)) as client:
+                await client.get(LOGIN_PATH)
+
+        assert not caplog.records
 
 
 class TestUnauthenticatedBrowserNavigationRedirectsToLogin:
@@ -275,6 +340,24 @@ class TestLoginSubmission:
             response = await client.post(LOGIN_PATH, data={"token": "wrong-token"})
             assert response.status == 401
             assert "Set-Cookie" not in response.headers
+
+    async def test_a_wrong_token_logs_a_warning_naming_the_client(
+        self, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        app = _app_with_login("expected-token")
+
+        with caplog.at_level("WARNING", logger="comfyui_curu_auth"):
+            async with TestClient(TestServer(app)) as client:
+                await client.post(
+                    LOGIN_PATH,
+                    data={"token": "wrong-token"},
+                    headers={"X-Forwarded-For": "203.0.113.9"},
+                )
+
+        assert any(
+            "authentication failure" in r.message and "203.0.113.9" in r.message
+            for r in caplog.records
+        )
 
 
 class TestCookieAuthenticatesLikeTheHeaderDoes:
