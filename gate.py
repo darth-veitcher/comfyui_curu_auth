@@ -409,17 +409,24 @@ _LOGIN_PAGE_TEMPLATE = """\
 (function () {{
   var el = document.getElementById('curu-auth-countdown');
   if (!el) return;
-  var seconds = parseInt(el.textContent, 10);
-  var timer = setInterval(function () {{
-    seconds -= 1;
-    if (seconds <= 0) {{
+  // Anchored to a real deadline, not a plain per-tick decrement -- a
+  // backgrounded/inactive tab throttles setInterval (sometimes to once
+  // a minute), so a naive counter drifts arbitrarily far behind real
+  // elapsed time. Recomputing from Date.now() every tick means the
+  // display always reflects the true remaining time (or clears itself)
+  // the next tick that fires, however late that tick actually was.
+  var deadline = Date.now() + parseInt(el.textContent, 10) * 1000;
+  var tick = function () {{
+    var remaining = Math.ceil((deadline - Date.now()) / 1000);
+    if (remaining <= 0) {{
       clearInterval(timer);
       var slot = document.querySelector('.message-slot');
       if (slot) slot.innerHTML = '';
     }} else {{
-      el.textContent = seconds;
+      el.textContent = remaining;
     }}
-  }}, 1000);
+  }};
+  var timer = setInterval(tick, 1000);
 }})();
 </script>
 </body>

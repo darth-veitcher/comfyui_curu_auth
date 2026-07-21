@@ -644,6 +644,33 @@ class TestLoginSubmissionIsRateLimited:
             script = body.split("<script>", 1)[1]
             assert "curu-auth-countdown" in script
 
+    async def test_the_countdown_script_is_anchored_to_a_real_deadline(
+        self,
+    ) -> None:
+        # A plain "decrement a counter every setInterval tick" countdown
+        # silently drifts from the real server-side deadline whenever a
+        # tick doesn't fire on time -- browsers throttle setInterval in a
+        # backgrounded/inactive tab, sometimes to once a minute, so a
+        # human tabbing away and back sees a display that still claims
+        # "blocked" long after the real block already expired (live-
+        # reported: the correct credential worked immediately once
+        # actually retried, even while the display still showed time
+        # remaining). Recomputing remaining = deadline - Date.now() on
+        # every tick, instead of accumulating -1-per-tick, makes the
+        # display self-correct to the true remaining time (or clear
+        # itself) the very next tick that does fire, however late.
+        limiter = RateLimiter(base_delay=60.0, max_delay=300.0)
+        app = _app_with_login("expected-token", rate_limiter=limiter)
+
+        async with TestClient(TestServer(app)) as client:
+            await client.post(LOGIN_PATH, data={"token": "wrong-token"})
+            blocked = await client.post(LOGIN_PATH, data={"token": "wrong-token"})
+            assert blocked.status == 429
+            body = await blocked.text()
+
+            script = body.split("<script>", 1)[1]
+            assert "Date.now()" in script
+
 
 class _FakeTransport:
     """Just enough of a real transport for `Request.remote` -- it reads
