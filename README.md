@@ -103,3 +103,7 @@ Extracted from [curu](https://github.com/darth-veitcher/curu)'s own
 `local-network-auth-and-encryption` epic, where this gate's credential
 scheme was originally designed to harmonise with curu's own
 control-plane API — reused here standalone, not re-derived.
+
+## License
+
+MIT — see [LICENSE](LICENSE).
