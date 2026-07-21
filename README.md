@@ -65,13 +65,9 @@ comfyui_curu_auth: authentication failure from 203.0.113.7 (GET /object_info)
 comfyui_curu_auth: authentication failure from 203.0.113.7 (login form)
 ```
 
-Ready-to-install config lives in [`contrib/`](contrib/):
-
-- **fail2ban** — [`contrib/fail2ban/comfyui-curu-auth.conf`](contrib/fail2ban/comfyui-curu-auth.conf) (filter, verified against sample log lines with `fail2ban-regex`) + [`contrib/fail2ban/jail-comfyui-curu-auth.local`](contrib/fail2ban/jail-comfyui-curu-auth.local) (jail).
-- **crowdsec** — [`contrib/crowdsec/parsers/comfyui-curu-auth.yaml`](contrib/crowdsec/parsers/comfyui-curu-auth.yaml) + [`contrib/crowdsec/scenarios/comfyui-curu-auth-bruteforce.yaml`](contrib/crowdsec/scenarios/comfyui-curu-auth-bruteforce.yaml) (a verified-correct starting point per crowdsec's own syntax, not yet exercised against a live instance — confirm with `cscli explain` first).
-
-Copy the files into place, point your tool's own log source at ComfyUI's
-output, and it bans at the network level — entirely outside this process.
+Ready-to-install fail2ban and crowdsec config, plus step-by-step
+install instructions for each, live in
+[`contrib/`](contrib/README.md).
 
 ## How it works
 
