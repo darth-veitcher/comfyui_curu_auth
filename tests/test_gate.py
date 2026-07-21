@@ -111,9 +111,9 @@ class TestFailedBearerAuthIsLogged:
     """A clear, stable, greppable log line per rejected Bearer-header
     request -- external log-watching tools (fail2ban, crowdsec) key off
     this to block at the network level, entirely outside this process's
-    own control. Deliberately not rate-limited here (see `RateLimiter`'s
-    own docstring for why the Bearer-header path itself never blocks) --
-    logging is a separate, additive concern from blocking."""
+    own control. Independent of, and unaffected by, whether a
+    `rate_limiter` is also supplied (`TestBearerAuthIsRateLimited` below)
+    -- logging is a separate, additive concern from blocking."""
 
     async def test_a_missing_credential_logs_a_warning_naming_the_client(
         self, caplog: pytest.LogCaptureFixture
@@ -147,6 +147,132 @@ class TestFailedBearerAuthIsLogged:
                 await client.get(LOGIN_PATH)
 
         assert not caplog.records
+
+
+class TestBearerAuthIsRateLimited:
+    """The Bearer-header/API path now backs off exactly like the login
+    form does -- an earlier version of this gate deliberately exempted
+    it (locking out a legitimately-configured automated client during a
+    transient misconfiguration was judged a worse outcome than the
+    brute-force risk). The credential's own 256 bits of entropy already
+    makes a *successful* guess computationally infeasible regardless of
+    backoff; leaving this path completely unthrottled was a real,
+    unnecessary gap for noisy automated scanning, not a defensible
+    tradeoff -- so it now gets the same defence in depth the login form
+    already had.
+
+    `rate_limiter=None` (the default) keeps every pre-existing
+    caller/test of this function's behaviour unchanged -- this is an
+    opt-in extension, mirroring `sessions=None`'s own precedent."""
+
+    async def test_without_a_rate_limiter_repeated_failures_are_never_blocked(
+        self,
+    ) -> None:
+        app = web.Application(middlewares=[build_gate_middleware("expected-token")])
+        app.router.add_get("/anything", _ok_handler)
+
+        async with TestClient(TestServer(app)) as client:
+            for _ in range(10):
+                response = await client.get(
+                    "/anything", headers={"Authorization": "Bearer wrong-token"}
+                )
+                assert response.status == 401
+
+    async def test_a_blocked_client_gets_429_before_the_credential_is_even_checked(
+        self,
+    ) -> None:
+        limiter = RateLimiter(base_delay=60.0, max_delay=300.0)
+        app = web.Application(
+            middlewares=[build_gate_middleware("expected-token", rate_limiter=limiter)]
+        )
+        app.router.add_get("/anything", _ok_handler)
+
+        async with TestClient(TestServer(app)) as client:
+            first = await client.get(
+                "/anything", headers={"Authorization": "Bearer wrong-token"}
+            )
+            assert first.status == 401
+
+            # Still blocked -- even the *correct* credential is rejected
+            # with 429 while backed off, never reaching the credential
+            # check at all (matches the login form's own established
+            # semantics exactly).
+            second = await client.get(
+                "/anything", headers={"Authorization": "Bearer expected-token"}
+            )
+            assert second.status == 429
+            assert "Retry-After" in second.headers
+
+    async def test_a_blocked_browser_request_redirects_to_login_not_bare_json(
+        self,
+    ) -> None:
+        # The 401 branch already redirects an Accept: text/html request
+        # to LOGIN_PATH instead of a bare JSON body a human has no way to
+        # act on -- the 429 branch honours that same content negotiation,
+        # or a real browser reloading a gated page while backed off (not
+        # just a scanner) would hit exactly the failure mode that check
+        # exists to avoid.
+        limiter = RateLimiter(base_delay=60.0, max_delay=300.0)
+        app = web.Application(
+            middlewares=[build_gate_middleware("expected-token", rate_limiter=limiter)]
+        )
+        app.router.add_get("/anything", _ok_handler)
+
+        async with TestClient(TestServer(app)) as client:
+            await client.get("/anything", headers={"Accept": "text/html"})
+
+            blocked = await client.get(
+                "/anything", headers={"Accept": "text/html"}, allow_redirects=False
+            )
+            assert blocked.status == 302
+            assert blocked.headers["Location"] == LOGIN_PATH
+
+    async def test_a_correct_credential_resets_the_backoff(self) -> None:
+        limiter = RateLimiter(base_delay=0.0, max_delay=300.0)
+        app = web.Application(
+            middlewares=[build_gate_middleware("expected-token", rate_limiter=limiter)]
+        )
+        app.router.add_get("/anything", _ok_handler)
+
+        async with TestClient(TestServer(app)) as client:
+            failed = await client.get(
+                "/anything", headers={"Authorization": "Bearer wrong-token"}
+            )
+            assert failed.status == 401
+
+            succeeded = await client.get(
+                "/anything", headers={"Authorization": "Bearer expected-token"}
+            )
+            assert succeeded.status == 200
+
+    async def test_a_valid_cookie_session_bypasses_rate_limiting_entirely(
+        self,
+    ) -> None:
+        # An already-established browser session (via the login form's
+        # own separate rate-limited flow) must never be penalised by
+        # backoff accrued on the Bearer-header path -- the cookie check
+        # happens before the rate-limit check, not after.
+        limiter = RateLimiter(base_delay=300.0, max_delay=300.0)
+        sessions = SessionStore()
+        token = sessions.issue()
+        app = web.Application(
+            middlewares=[
+                build_gate_middleware(
+                    "expected-token", sessions=sessions, rate_limiter=limiter
+                )
+            ]
+        )
+        app.router.add_get("/anything", _ok_handler)
+
+        async with TestClient(TestServer(app)) as client:
+            blocked = await client.get(
+                "/anything", headers={"Authorization": "Bearer wrong-token"}
+            )
+            assert blocked.status == 401
+
+            client.session.cookie_jar.update_cookies({COOKIE_NAME: token})
+            response = await client.get("/anything")
+            assert response.status == 200
 
 
 class TestUnauthenticatedBrowserNavigationRedirectsToLogin:
@@ -496,6 +622,27 @@ class TestLoginSubmissionIsRateLimited:
             second = await client.post(LOGIN_PATH, data={"token": "expected-token"})
             assert second.status == 429
             assert "Retry-After" in second.headers
+
+    async def test_the_blocked_page_embeds_a_live_countdown_not_a_static_number(
+        self,
+    ) -> None:
+        # A "Try again in 4s" message that never updates leaves a stale
+        # number on screen long after the block actually expired -- a
+        # human has no way to tell without submitting again. The response
+        # instead embeds an element the countdown script decrements
+        # client-side, once a second, down to 0.
+        limiter = RateLimiter(base_delay=60.0, max_delay=300.0)
+        app = _app_with_login("expected-token", rate_limiter=limiter)
+
+        async with TestClient(TestServer(app)) as client:
+            await client.post(LOGIN_PATH, data={"token": "wrong-token"})
+            blocked = await client.post(LOGIN_PATH, data={"token": "wrong-token"})
+            assert blocked.status == 429
+            body = await blocked.text()
+
+            assert 'id="curu-auth-countdown"' in body
+            script = body.split("<script>", 1)[1]
+            assert "curu-auth-countdown" in script
 
 
 class _FakeTransport:

@@ -1,0 +1,14 @@
+# Copy to /etc/crowdsec/parsers/s01-parse/comfyui-curu-auth.yaml, then:
+#   cscli parsers install --path ./comfyui-curu-auth.yaml
+onsuccess: next_stage
+name: comfyui-curu-auth/logs
+description: "Parse comfyui_curu_auth authentication failures"
+filter: "evt.Line.Raw contains 'comfyui_curu_auth: authentication failure'"
+grok:
+  pattern: 'comfyui_curu_auth: authentication failure from %{IP:source_ip}'
+  apply_on: Line.Raw
+statics:
+  - meta: log_type
+    value: comfyui_curu_auth_auth_fail
+  - meta: source_ip
+    expression: "evt.Parsed.source_ip"

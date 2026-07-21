@@ -40,6 +40,7 @@ from .gate import (  # ty: ignore[unresolved-import]  # ComfyUI's own custom-
     # package context (the same reason `import server` below needs its own
     # ignore comment) and would otherwise misreport this as unresolved.
     LOGIN_PATH,
+    RateLimiter,
     SessionStore,
     build_gate_middleware,
     build_login_routes,
@@ -67,9 +68,18 @@ if server is not None:
     print(f"comfyui-curu-auth gate active. Credential:\n  {_credential}")
     print(f"Browser login (paste the same credential above): {LOGIN_PATH}")
     _sessions = SessionStore()
+    # One shared instance for both paths -- a client backed off on one
+    # (e.g. hammering the Bearer header) is backed off on the other too.
+    _rate_limiter = RateLimiter()
     _app = server.PromptServer.instance.app
-    _app.middlewares.append(build_gate_middleware(_credential, sessions=_sessions))
-    _login_get, _login_post = build_login_routes(_credential, sessions=_sessions)
+    _app.middlewares.append(
+        build_gate_middleware(
+            _credential, sessions=_sessions, rate_limiter=_rate_limiter
+        )
+    )
+    _login_get, _login_post = build_login_routes(
+        _credential, sessions=_sessions, rate_limiter=_rate_limiter
+    )
     _app.router.add_get(LOGIN_PATH, _login_get)
     _app.router.add_post(LOGIN_PATH, _login_post)
 

@@ -77,7 +77,10 @@ def resolve_credential(env_value: str | None) -> str:
 
 
 def build_gate_middleware(
-    credential: str, *, sessions: SessionStore | None = None
+    credential: str,
+    *,
+    sessions: SessionStore | None = None,
+    rate_limiter: RateLimiter | None = None,
 ) -> Middleware:
     """Return an aiohttp ``@web.middleware`` function that rejects any
     request lacking ``credential`` -- as ``Authorization: Bearer
@@ -95,13 +98,25 @@ def build_gate_middleware(
     every pre-browser-login caller/test of this function keeps its exact
     original behaviour (Bearer header only).
 
+    ``rate_limiter``, when supplied, backs off the Bearer-header path
+    exactly like :func:`build_login_routes` already backs off the login
+    form -- see :class:`RateLimiter`'s own docstring for the reasoning.
+    ``rate_limiter=None`` (the default) keeps every pre-existing
+    caller/test of this function unchanged. A client currently backed off
+    gets 429 before the credential is even checked -- even the *correct*
+    credential is rejected while blocked, matching the login form's own
+    established semantics exactly. An already-valid cookie session is
+    checked first and never touches the rate limiter at all -- it must
+    never be penalised by backoff accrued on this separate path.
+
     A rejected request that also carries ``Accept: text/html`` gets a
-    302 redirect to :data:`LOGIN_PATH` instead of a bare JSON 401 -- a
-    human navigating directly to any gated page has no way to act on a
-    JSON error body without already knowing the login form's URL. A
-    real, automated Bearer-header HTTP client and a WebSocket handshake
-    both never send that header, so this never changes behaviour for
-    either of them (only a real browser page-load does).
+    302 redirect to :data:`LOGIN_PATH` instead of a bare JSON error body
+    (401 or, while backed off, 429) -- a human navigating directly to
+    any gated page has no way to act on a JSON error body without
+    already knowing the login form's URL. A real, automated
+    Bearer-header HTTP client and a WebSocket handshake both never send
+    that header, so this never changes behaviour for either of them
+    (only a real browser page-load does).
 
     ``secrets.compare_digest`` on ``bytes`` (not ``str``) avoids a crash
     a plain ``str`` comparison would raise on a non-ASCII
@@ -117,24 +132,41 @@ def build_gate_middleware(
         if request.path == LOGIN_PATH:
             return await handler(request)
 
-        supplied_header = request.headers.get("Authorization", "").encode("latin-1")
-        if secrets.compare_digest(supplied_header, expected_header):
-            return await handler(request)
-
         if sessions is not None:
             supplied_cookie = request.cookies.get(COOKIE_NAME, "")
             if supplied_cookie and sessions.is_valid(supplied_cookie):
                 return await handler(request)
 
-        # Logged, never rate-limited or blocked here (RateLimiter's own
-        # docstring: blocking this path risks locking a legitimate
-        # automated client out of recovering from a transient
-        # misconfiguration) -- an external log-watching tool decides
-        # whether/how to act on repeated failures, this gate only ever
-        # reports them.
+        client_key = _client_key(request)
+
+        if rate_limiter is not None:
+            retry_after = rate_limiter.seconds_until_retry(client_key)
+            if retry_after > 0:
+                seconds = int(retry_after) + 1
+                if "text/html" in request.headers.get("Accept", ""):
+                    # Mirrors the 401 branch's own content negotiation
+                    # below -- a real browser reloading a gated page
+                    # while backed off has no way to act on a bare JSON
+                    # body, same as an outright missing/wrong credential.
+                    raise web.HTTPFound(LOGIN_PATH)
+                return web.json_response(
+                    {"detail": "too many attempts", "retry_after": seconds},
+                    status=429,
+                    headers={"Retry-After": str(seconds)},
+                )
+
+        supplied_header = request.headers.get("Authorization", "").encode("latin-1")
+        if secrets.compare_digest(supplied_header, expected_header):
+            if rate_limiter is not None:
+                rate_limiter.record_success(client_key)
+            return await handler(request)
+
+        if rate_limiter is not None:
+            rate_limiter.record_failure(client_key)
+
         _logger.warning(
             "comfyui_curu_auth: authentication failure from %s (%s %s)",
-            _client_key(request),
+            client_key,
             request.method,
             request.path,
         )
@@ -191,23 +223,30 @@ class SessionStore:
 
 
 class RateLimiter:
-    """Per-client exponential backoff after repeated failed login
-    attempts against :data:`LOGIN_PATH` (defence in depth -- the
-    credential itself is 256 bits of entropy from
-    :func:`generate_credential`, already computationally infeasible to
-    brute-force regardless of this; this bounds the request/log volume an
-    automated scanner probing a human-friendly login form can generate).
+    """Per-client exponential backoff after repeated failed authentication
+    attempts -- against :data:`LOGIN_PATH` (:func:`build_login_routes`)
+    and, when opted into via ``build_gate_middleware``'s own
+    ``rate_limiter`` parameter, the Bearer-header path every other route
+    uses too (defence in depth -- the credential itself is 256 bits of
+    entropy from :func:`generate_credential`, already computationally
+    infeasible to brute-force regardless of this; this bounds the
+    request/log volume an automated scanner can generate on either
+    path).
 
     Deliberately in-process, in-memory state, not durable storage --
     mirrors this gate's own fully-stateless design elsewhere (simple, no
     persistent state); a ComfyUI restart clears it, exactly like the
     credential itself resets on every restart.
 
-    Deliberately scoped to the login form only, never the Bearer-header
-    path every other route uses -- rate-limiting that path risks locking
-    an automated client out of recovering from a transient
-    misconfiguration, a strictly worse outcome than the brute-force risk
-    this class defends against.
+    An earlier version of this gate scoped backoff to the login form
+    only, on the reasoning that rate-limiting the Bearer-header path
+    risked locking an automated client out of recovering from a
+    transient misconfiguration. Reconsidered: that exemption left a
+    real, unnecessary gap for noisy automated scanning against that
+    path, and the same 429-with-Retry-After response a misconfigured
+    client would already have to handle on the login form is no worse a
+    failure mode here -- so both paths now share the same backoff
+    discipline when a caller supplies one instance to both.
     """
 
     def __init__(self, *, base_delay: float = 1.0, max_delay: float = 300.0) -> None:
@@ -366,12 +405,41 @@ _LOGIN_PAGE_TEMPLATE = """\
     <button type="submit">Log in</button>
   </form>
 </main>
+<script>
+(function () {{
+  var el = document.getElementById('curu-auth-countdown');
+  if (!el) return;
+  var seconds = parseInt(el.textContent, 10);
+  var timer = setInterval(function () {{
+    seconds -= 1;
+    if (seconds <= 0) {{
+      clearInterval(timer);
+      var slot = document.querySelector('.message-slot');
+      if (slot) slot.innerHTML = '';
+    }} else {{
+      el.textContent = seconds;
+    }}
+  }}, 1000);
+}})();
+</script>
 </body>
 </html>
 """
 
 
-def _render_login_page(*, message: str = "") -> str:
+def _render_login_page(*, message: str = "", retry_after: int | None = None) -> str:
+    """``retry_after``, when given, renders a live countdown (an
+    ``id="curu-auth-countdown"`` span the page's own script decrements
+    once a second) instead of a static "Try again in Ns" that would
+    otherwise sit on screen unchanged long after the block has actually
+    expired -- a human has no way to tell it's expired without
+    submitting again."""
+
+    if retry_after is not None:
+        message = (
+            "<p>Too many attempts. Try again in "
+            f'<span id="curu-auth-countdown">{retry_after}</span>s.</p>'
+        )
     return _LOGIN_PAGE_TEMPLATE.format(message=message, login_path=LOGIN_PATH)
 
 
@@ -443,9 +511,7 @@ def build_login_routes(
             # human should see the same page, not an unstyled API error.
             seconds = int(retry_after) + 1
             return web.Response(
-                text=_render_login_page(
-                    message=f"<p>Too many attempts. Try again in {seconds}s.</p>"
-                ),
+                text=_render_login_page(retry_after=seconds),
                 content_type="text/html",
                 status=429,
                 headers={"Retry-After": str(seconds)},

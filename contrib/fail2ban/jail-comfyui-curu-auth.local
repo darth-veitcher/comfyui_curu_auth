@@ -1,0 +1,12 @@
+# Append to /etc/fail2ban/jail.local (or drop as its own file under
+# /etc/fail2ban/jail.d/) after installing comfyui-curu-auth.conf above.
+[comfyui-curu-auth]
+enabled  = true
+filter   = comfyui-curu-auth
+# If ComfyUI runs under systemd and logs to the journal instead of a file,
+# use this instead of logpath:
+#   journalmatch = _SYSTEMD_UNIT=comfyui.service
+logpath  = /path/to/comfyui/output.log
+maxretry = 5
+findtime = 600
+bantime  = 3600

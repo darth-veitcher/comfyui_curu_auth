@@ -1,0 +1,20 @@
+# Copy to /etc/crowdsec/scenarios/comfyui-curu-auth-bruteforce.yaml, then:
+#   cscli scenarios install --path ./comfyui-curu-auth-bruteforce.yaml
+#
+# Requires the parser in ../parsers/comfyui-curu-auth.yaml to be installed
+# first (it produces the evt.Meta.log_type this scenario filters on).
+# Not exercised against a live crowdsec instance -- a verified-correct
+# starting point following crowdsec's own documented YAML syntax, not a
+# drop-in guarantee. Confirm with `cscli explain` against a sample log
+# line before relying on it.
+type: leaky
+name: comfyui-curu-auth/bruteforce
+description: "Detect brute-force attempts against comfyui_curu_auth"
+filter: "evt.Meta.log_type == 'comfyui_curu_auth_auth_fail'"
+groupby: evt.Meta.source_ip
+capacity: 5
+leakspeed: "10m"
+blackhole: 1m
+labels:
+  service: comfyui
+  type: bruteforce
