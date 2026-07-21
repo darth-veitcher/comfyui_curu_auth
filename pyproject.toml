@@ -1,0 +1,38 @@
+[project]
+name = "comfyui_curu_auth"
+version = "0.1.0"
+description = "Standalone ComfyUI custom node that gates a ComfyUI backend behind a bearer-token credential -- covers every route ComfyUI serves, including the /ws websocket handshake its own progress streaming depends on."
+readme = "README.md"
+requires-python = ">=3.12"
+dependencies = ["aiohttp>=3.9"]
+
+[dependency-groups]
+dev = ["pytest>=8.2", "pytest-asyncio>=0.24", "ruff>=0.6", "ty>=0.0.1a1"]
+
+# This package is loaded directly by ComfyUI as a raw custom_nodes/ directory --
+# it is never `pip install`ed or built into a wheel. `package = false` tells uv
+# not to try to build one; this pyproject.toml exists purely to manage the dev/
+# test dependency group above.
+[tool.uv]
+package = false
+
+[tool.pytest.ini_options]
+minversion = "8.0"
+testpaths = ["tests"]
+addopts = "-ra --strict-markers --import-mode=importlib"
+pythonpath = ["."]
+asyncio_mode = "auto"
+
+[tool.ruff]
+line-length = 88
+target-version = "py312"
+src = ["."]
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "N", "UP", "B", "SIM", "RUF"]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/**" = ["S101"]
+
+[tool.ty.environment]
+python-version = "3.12"
