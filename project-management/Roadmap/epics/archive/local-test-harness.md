@@ -1,7 +1,7 @@
 # Epic: CPU-only Docker integration harness for ComfyUI + this node
 
 ## Status
-Planning  — started 2026-07-23
+Done — completed 2026-07-23
 
 ## Why now
 The one thing the README and existing test suite already flag as unverified

@@ -14,9 +14,11 @@ gantt
 
     section Planned
     Browser-driven E2E harness (Playwright + virtual authenticator) :browser-e2e, after local-test-harness, 7d
-    CPU-only Docker integration harness for ComfyUI + this node :local-test-harness, 2026-07-23, 7d
     Optional OIDC/OAuth login path :oidc-auth, after local-test-harness, 7d
     Passwordless WebAuthn/passkey login :passkey-auth, after browser-e2e, 7d
+
+    section Done
+    CPU-only Docker integration harness for ComfyUI + this node :done, local-test-harness, 2026-07-23, 7d
 
 ```
 
@@ -25,17 +27,15 @@ gantt
 | Epic | Title | Status | Specs | Fidelity |
 |---|---|---|---|---|
 | [browser-e2e](project-management/Roadmap/epics/browser-e2e.md) | Browser-driven E2E harness (Playwright + virtual authenticator) | Planning | — | S? A+ T:- |
-| [local-test-harness](project-management/Roadmap/epics/local-test-harness.md) | CPU-only Docker integration harness for ComfyUI + this node | Planning | 0/1 shipped | S+ A+ T:95% |
 | [oidc-auth](project-management/Roadmap/epics/oidc-auth.md) | Optional OIDC/OAuth login path | Planning | — | S? A+ T:- |
 | [passkey-auth](project-management/Roadmap/epics/passkey-auth.md) | Passwordless WebAuthn/passkey login | Planning | — | S? A? T:- |
+| [local-test-harness](project-management/Roadmap/epics/archive/local-test-harness.md) | CPU-only Docker integration harness for ComfyUI + this node | Done | 1/1 shipped | S+ A+ T:100% |
 
 _Fidelity: `S+/S?` = has specs / none · `A+/A?` = has ADRs / none · `T:N%` = task completion_
 
 ## Active Work
 
-**local-test-harness**
-
-- `001-docker-comfyui-harness` — [P] `beacon doctor --strict` clean before calling this feature's
+_No active bullets._
 
 ## Architectural Decisions
 
