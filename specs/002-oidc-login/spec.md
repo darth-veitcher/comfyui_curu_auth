@@ -32,6 +32,8 @@ confirm landing back on ComfyUI's UI in an authenticated session.
 1. **Given** OIDC is configured, **When** the operator initiates login via the OIDC option, **Then** they are redirected to their identity provider to authenticate.
 2. **Given** the operator successfully authenticates at the identity provider, **When** they are redirected back, **Then** they land on ComfyUI's UI in an authenticated session — indistinguishable, session-wise, from a form login with the default credential.
 3. **Given** the operator cancels or fails authentication at the identity provider, **When** they are redirected back (or return to ComfyUI directly), **Then** they are not authenticated and see an appropriate message.
+4. **Given** a state/code pair that already completed a login once, **When** it is submitted again verbatim, **Then** the second attempt is rejected, not accepted (found during adversarial engineering review, 2026-07-23; FR-011).
+5. **Given** the OIDC login-initiation route is reachable without a session, **When** it is hit repeatedly by an unauthenticated caller, **Then** the same rate-limiting already applied to other unauthenticated paths applies here too, and in-flight state does not grow without bound (found during adversarial engineering review, 2026-07-23; FR-010).
 
 ---
 
@@ -94,6 +96,11 @@ existing paths already exhibit.
 - What happens if someone replays or forges an OIDC callback (a
   captured/guessed redirect URL, without ever having authenticated)? It
   MUST be rejected — see FR-007.
+- A verbatim replay of a *previously-completed* callback, and repeated
+  hits on the login-initiation route by an unauthenticated caller, are
+  both promoted to full Acceptance Scenarios under User Story 1 above
+  (Scenarios 4 and 5) rather than left as edge-case prose only — found
+  during adversarial engineering review, 2026-07-23 (FR-010, FR-011).
 
 ## Requirements *(mandatory)*
 
@@ -127,6 +134,17 @@ existing paths already exhibit.
 - **FR-009**: If OIDC configuration is only partially supplied, the
   system MUST fail safe to "OIDC is unconfigured" (User Story 2's
   behavior), never to a half-configured state that starts anyway.
+- **FR-010**: The OIDC login-initiation route MUST be subject to the same
+  rate-limiting as every other unauthenticated path, and the amount of
+  in-flight-authorization-request state an unauthenticated caller can
+  cause the system to hold MUST be bounded — this route is necessarily
+  reachable pre-session (like the login form already is), and that MUST
+  NOT become an unthrottled resource-exhaustion path (found during
+  adversarial engineering review, 2026-07-23).
+- **FR-011**: A completed authorization attempt (a state/code pair that
+  already succeeded once) MUST be single-use — resubmitting it verbatim
+  MUST be rejected, not accepted a second time (found during adversarial
+  engineering review, 2026-07-23).
 
 ## Success Criteria *(mandatory)*
 

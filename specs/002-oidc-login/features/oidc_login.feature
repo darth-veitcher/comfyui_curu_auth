@@ -34,3 +34,13 @@ Feature: OIDC/OAuth login path
     Given a failed OIDC attempt is rejected
     When it happens
     Then a stable, greppable log line is emitted matching the existing fail2ban/crowdsec-compatible format
+
+  Scenario: A completed authorization attempt cannot be replayed
+    Given a state/code pair that already succeeded once
+    When it is submitted again verbatim
+    Then the second attempt is rejected, not accepted
+
+  Scenario: The login-initiation route is rate-limited and bounded like other unauthenticated paths
+    Given the OIDC login-initiation route is reachable without a session
+    When it is hit repeatedly by an unauthenticated caller
+    Then the same rate-limiting applies and in-flight state does not grow without bound

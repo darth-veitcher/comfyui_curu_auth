@@ -63,14 +63,23 @@ multi-tenant, not multiple simultaneous providers
 | Principle | Assessment |
 |---|---|
 | I. Minimal Attack Surface (NON-NEGOTIABLE) | PASS, with one justified addition. `joserfc` is the sole new dependency — narrowly scoped to JOSE/JWT verification (research.md), chosen specifically because hand-rolling signature verification is a worse attack-surface outcome than a vetted, narrow library. Discovery/token-exchange reuse the existing `aiohttp`. OIDC is entirely opt-in (FR-001/FR-002) — the zero-dependency default path is untouched when unconfigured. |
-| II. Total Route Coverage (NON-NEGOTIABLE) | PASS. The OIDC start/callback routes are the *only* new unauthenticated-reachable paths, and only when OIDC is configured — generalizing `LOGIN_PATH`'s existing single-path carve-out into a small, explicit set (research.md), not a broad prefix rule. Every other route stays fully gated exactly as today. |
+| II. Total Route Coverage (NON-NEGOTIABLE) | PASS, revised after adversarial engineering review (2026-07-23). The OIDC start/callback routes are the *only* new unauthenticated-reachable paths, and only when OIDC is configured — generalizing `LOGIN_PATH`'s existing single-path carve-out into a small, explicit set (research.md), not a broad prefix rule. Every other route stays fully gated exactly as today. The initial assessment reasoned only about the *bypass* itself; it's now extended to what the bypass *exposes*: the start route being unauthenticated-reachable means it must not become an unthrottled resource-exhaustion path (FR-010) — closed by reusing the existing shared `RateLimiter` on that route plus an independent size cap on the in-flight-request store (research.md), not a new gate mechanism. |
 | III. Zero-Config by Default | PASS. FR-002/FR-009: no OIDC route or behavior exists unless fully configured; partial configuration fails safe to unconfigured, never to a half-working state. |
-| IV. Test-First for Security-Critical Logic (NON-NEGOTIABLE) | Applies most sharply here of any feature so far: token signature verification, `state`/`nonce`/PKCE validation, and the public-paths carve-out are exactly the logic this principle exists for. `tasks.md` must sequence tests before implementation for each. |
-| V. Simplicity | PASS. Authorization-code flow hand-rolled over existing `aiohttp` rather than adopting a full OAuth client framework; only the genuinely hard cryptographic part gets a dedicated library. |
+| IV. Test-First for Security-Critical Logic (NON-NEGOTIABLE) | Applies most sharply here of any feature so far: token signature verification, `state`/`nonce`/PKCE validation, single-use replay rejection (FR-011), and the public-paths carve-out are exactly the logic this principle exists for. `tasks.md` sequences tests before implementation for each, with no compression of the pairing on this spec's crypto-heavy core. |
+| V. Simplicity | PASS. Authorization-code flow hand-rolled over existing `aiohttp` rather than adopting a full OAuth client framework; only the genuinely hard cryptographic part gets a dedicated library. Start-route protection reuses the existing `RateLimiter` rather than inventing a second throttling mechanism. |
 
 No violations. Complexity Tracking table below is not needed — the one
 new dependency is a justified addition under Principle I, not an
 exception to it.
+
+**Post-adversarial-review re-check (2026-07-23)**: Principle II's
+assessment above was strengthened per the review's finding (start-route
+exposure was previously unaddressed). No other principle's assessment
+changed — the review's remaining findings (issuer-URL duality, headless
+login feasibility, discovery-fetch/JWKS caching, `_client_key` promotion,
+replay rejection) are implementation-correctness and scope findings, not
+Constitution-level concerns, and are resolved in research.md and
+tasks.md.
 
 **Post-Phase-1 re-check**: Unchanged — Phase 1 design (below) introduced
 no dependencies or principle tensions beyond what's assessed above.
@@ -97,20 +106,28 @@ logic, not a public API.
 oidc.py                    # New module, parallel to gate.py:
                             #   - resolve_oidc_config() from env vars (None if
                             #     unconfigured/partial -- FR-009)
-                            #   - discovery-document fetch (aiohttp)
-                            #   - authorization URL builder (state/nonce/PKCE)
+                            #   - discovery-document fetch (aiohttp, fresh per
+                            #     attempt, bounded timeout, fail-closed)
+                            #   - authorization URL builder (state/nonce/PKCE,
+                            #     with a size-capped in-flight store -- FR-010)
                             #   - token exchange (aiohttp POST to token endpoint)
-                            #   - ID token verification (joserfc: JWKS fetch,
-                            #     signature, iss/aud/exp/nonce claims)
+                            #   - ID token verification (joserfc: JWKS fetch --
+                            #     fresh per attempt, no cache -- signature,
+                            #     iss/aud/exp/nonce claims)
                             #   - build_oidc_routes() -- (start, callback) handlers,
-                            #     mirroring gate.py's build_login_routes() shape
+                            #     mirroring gate.py's build_login_routes() shape;
+                            #     start route rate-limited via the existing
+                            #     shared RateLimiter (FR-010); callback enforces
+                            #     single-use state consumption (FR-011)
                             #   - in-memory, short-lived state store for
                             #     in-flight state/nonce/PKCE (FR-008)
 
-gate.py                    # Minimal change: LOGIN_PATH's single-path
-                            # unauthenticated bypass generalized to a small
-                            # public-paths set (research.md) -- the
-                            # Bearer-header/default-credential path itself
+gate.py                    # Two changes, both minimal: (1) LOGIN_PATH's
+                            # single-path unauthenticated bypass generalized
+                            # to a small public-paths set (research.md); (2)
+                            # `_client_key` promoted to a public `client_key`
+                            # export (oidc.py needs it too -- research.md).
+                            # The Bearer-header/default-credential path itself
                             # is otherwise untouched (FR-004)
 
 __init__.py                # Wires oidc.py's routes onto the same app,

@@ -34,8 +34,20 @@ that started an OIDC login with the callback that completes it.
     entry)
 - **Lifecycle**: created when the OIDC start route is hit; consumed
   (single use — deleted whether the callback succeeds or fails) when the
-  callback route processes it. Never durably stored; cleared entirely on
-  restart, exactly like `SessionStore` and `RateLimiter` (FR-008).
+  callback route processes it — a second submission of the same
+  state/code pair finds no matching entry and is rejected (FR-011,
+  Edge Cases: verbatim replay), not merely re-validated and accepted
+  again. Never durably stored; cleared entirely on restart, exactly like
+  `SessionStore` and `RateLimiter` (FR-008).
+- **Bounded creation** (FR-010, found during adversarial engineering
+  review): the login-initiation route that creates these entries is
+  reachable pre-session by definition (like the login form already is),
+  so it MUST be subject to the *existing* shared `RateLimiter` — the same
+  instance already backing the credential and login-form paths, not a
+  new mechanism — and the store's total size MUST be capped (oldest
+  entries evicted first) as a second, independent bound: rate-limiting
+  slows a single client; the size cap bounds the worst case if many
+  distinct client identities are used to spread the load.
 
 ## ID Token Claims (verified, not stored)
 
@@ -51,6 +63,12 @@ to mint a session — never persisted beyond that decision (FR-008).
   client key an operator's fail2ban/crowdsec setup already keys on,
   alongside IP) but not stored, since this gate has no user-account
   concept of its own to attach it to (epic Non-Goals: not multi-tenant)
+
+Both the discovery document and the provider's JWKS are fetched fresh on
+every login attempt, not cached — see research.md's "No JWKS caching" and
+"Discovery document fetched fresh" decisions. Login is infrequent enough
+that the extra HTTP round-trip is negligible, and an unstated cache would
+otherwise fail closed-but-silent after the provider rotates signing keys.
 
 ## Session (existing entity, reused — not redefined here)
 

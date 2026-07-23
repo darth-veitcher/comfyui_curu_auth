@@ -89,6 +89,130 @@ fast, offline unit coverage of the token-verification logic itself
 proving the real end-to-end flow, not for exhaustive edge-case coverage of
 `joserfc` usage.
 
+## Decision: Headless Authelia login — `POST /api/firstfactor` + authorization-URL `GET`, pre-configured `consent_mode: implicit`
+
+**Rationale**: Authelia's own login portal is a React SPA — a plain HTTP
+client can't "click through" it — but the API it calls is directly
+scriptable: `POST /api/firstfactor` with the harness's test user's
+credentials sets Authelia's own session cookie, after which a `GET` of the
+authorization URL (with that cookie attached) proceeds through Authelia's
+OIDC flow to the registered `redirect_uri`, no browser involved. The one
+precondition: the static client Authelia is configured with must set
+`consent_mode: implicit` (or otherwise pre-authorize the client) — without
+it, the flow stalls on an interactive consent screen a headless client
+can't drive. Validated as a throwaway spike (tasks.md's dedicated spike
+task) *before* any production callback-handling code was written — found
+during adversarial engineering review (2026-07-23) that this needed
+confirming, not assuming, given the live-verification criterion would
+otherwise silently depend on the not-yet-built `browser-e2e` epic.
+
+**Alternatives considered**: A real browser via Playwright — rejected;
+would pull `browser-e2e`'s dependency forward into this epic despite
+ADR-002/ADR-003 explicitly scoping it out, for no benefit over the
+scriptable API path Authelia already exposes.
+
+## Decision: Reconcile the issuer-URL duality — container-internal hostname for the gate, published host port for the test's simulated "browser"
+
+**Rationale**: Found during adversarial engineering review (2026-07-23) —
+the classic OIDC-in-Docker-Compose footgun. Two different callers reach
+Authelia from two different network vantage points, and conflating them
+is the actual risk, not a detail to gloss over:
+
+- The **gate** (inside the `comfyui` container) does every OIDC
+  backend-channel call — discovery-document fetch, token exchange, JWKS
+  fetch, and `iss`-claim comparison — against Authelia's
+  container-network hostname, `http://authelia:9091`. Authelia's own
+  `identity_providers.oidc.issuer` config is set to that exact same
+  value, so the `iss` claim it mints always matches what the gate
+  expects, independent of anything the front-channel does.
+- The **live test's simulated "browser"** (a host-side
+  `aiohttp.ClientSession`, per the headless-login decision above) reaches
+  Authelia's login/authorization endpoints via its **published port on
+  the host**, `http://localhost:9091`. It never validates the `iss`
+  claim itself, so this address never needs to match the gate's.
+- The **redirect_uri** registered with Authelia points at whatever
+  actually completes the front-channel redirect — the host-side test
+  client, so `http://localhost:8188/curu-auth/oidc/callback` (the
+  `comfyui` service's already-published port).
+
+Three addresses for what looks like "the same provider" — reconciled by
+keeping straight which is a backend-channel address (must match `iss`)
+and which are front-channel addresses (never validated, just reachable by
+whoever makes that particular call).
+
+**Alternatives considered**: A single shared hostname for everything
+(e.g. adding a host-side `/etc/hosts` entry so `authelia` resolves from
+the host too) — rejected as an unnecessary environment-specific setup
+step when the two-address reconciliation above needs no host
+configuration at all and generalizes to any developer's machine
+unchanged.
+
+## Decision: No JWKS caching — fetch fresh per verification
+
+**Rationale**: Found during adversarial engineering review (2026-07-23) —
+an unstated cache is worse than no cache here. Login is a low-frequency
+operation (not a hot request path), so the cost of one extra HTTP fetch
+per login is negligible, while a cache that never invalidates would fail
+every login after the provider rotates signing keys, silently, until a
+restart. Simplicity wins over a premature optimization.
+
+**Alternatives considered**: Cache JWKS for the process lifetime —
+rejected; saves one rare HTTP call per login at the cost of a silent,
+full-outage-on-key-rotation failure mode.
+
+## Decision: Discovery document fetched fresh per login attempt, with a bounded timeout and fail-closed on error
+
+**Rationale**: Directly required by the spec's own Edge Case ("identity
+provider is unreachable or times out during the callback") — the fetch
+needs an explicit `aiohttp.ClientTimeout` and must treat any failure
+(timeout, connection error, malformed document) as a hard failure of that
+login attempt, never a partial or cached fallback that could silently
+serve a stale or attacker-influenced endpoint set. Same reasoning as the
+JWKS decision above: a rare operation doesn't need a cache, and a cache
+would trade rare extra latency for a correctness risk.
+
+**Alternatives considered**: Fetch once at startup, cache for the process
+lifetime — rejected for the same reason as JWKS caching.
+
+## Decision: Promote `gate._client_key` to a public `client_key` export
+
+**Rationale**: Found during adversarial engineering review (2026-07-23) —
+`oidc.py` needs the exact same client-identity function `RateLimiter` and
+the failure logger already key on (US3's rate-limit/logging parity,
+FR-005/FR-006), but `_client_key` is underscore-private and absent from
+`gate.py`'s `__all__`. A second module needing a name is exactly the
+signal that it should no longer be private. Renamed and exported; no
+behavior change to the function itself.
+
+**Alternatives considered**: Importing the private name directly from
+`oidc.py` with a justifying comment — rejected; the entire point of a
+leading underscore is "nothing outside this module relies on this," and a
+second real consumer means that's no longer true.
+
+## Decision: The OIDC start route is rate-limited by the same shared `RateLimiter`, and the in-flight-request store is size-capped — both, not either
+
+**Rationale**: Found during adversarial engineering review (2026-07-23) —
+the start route must sit in the public-paths bypass (FR-010; it's
+reachable pre-session by definition, like the login form already is),
+which means an unauthenticated caller could otherwise hammer it to grow
+the In-Flight Auth Request store without limit (`data-model.md`'s own
+`created_at` field is explicitly not a security control). Two independent
+bounds, both cheap:
+- Reuse the *existing* shared `RateLimiter` instance (the same one
+  already backing the credential and login-form paths) on this route —
+  no new mechanism, matching Simplicity.
+- Cap the In-Flight store's total size (oldest entries evicted first) as
+  a second, independent bound — rate-limiting slows a single client
+  identity; the size cap bounds the worst case if an attacker spreads
+  requests across many distinct identities (e.g. rotating
+  `X-Forwarded-For` values) to evade per-client throttling.
+
+**Alternatives considered**: Rate-limiting alone — rejected; `_client_key`
+(soon `client_key`) is best-effort by its own docstring, and a size cap
+costs almost nothing to add as defense in depth against exactly the
+identity-rotation case that already documents itself as a known
+limitation.
+
 ## Decision: No `contracts/` directory
 
 **Rationale**: Consistent with `specs/001-docker-comfyui-harness/`'s own
