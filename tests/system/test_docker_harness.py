@@ -16,11 +16,20 @@ import asyncio
 import aiohttp
 import pytest
 
-from tests.system.conftest import AUTH_HEADERS, BASE_URL, compose, wait_until_reachable
+from gate import LOGIN_PATH
+from tests.system.conftest import (
+    AUTH_HEADERS,
+    BASE_URL,
+    TEST_AUTH_TOKEN,
+    compose,
+    wait_until_reachable,
+    wait_until_unreachable,
+)
 
 pytestmark = pytest.mark.system
 
 WS_URL = "ws://localhost:8188/ws"
+LOGIN_URL = f"{BASE_URL}{LOGIN_PATH}"
 
 
 @pytest.fixture(autouse=True)
@@ -114,3 +123,57 @@ class TestRepeatedWrongCredentialsTriggerBackoff:
 
         assert retry_afters[1] > retry_afters[0], retry_afters
         assert retry_afters[2] > retry_afters[1], retry_afters
+
+
+class TestTeardownAndRestartLeavesNoStaleState:
+    """Witness: feature scenario "Teardown and restart leave no stale
+    state" (spec.md US3, Acceptance Scenario 1; FR-007)."""
+
+    async def test_teardown_and_restart_leaves_no_stale_state(self) -> None:
+        blocked_client = {"X-Forwarded-For": "203.0.113.50"}
+
+        # First instance: mint a real session cookie, and put a client
+        # into a blocked state.
+        first_up = compose("up", "-d")
+        assert first_up.returncode == 0, first_up.stderr
+        await wait_until_reachable(timeout=180.0)
+
+        async with aiohttp.ClientSession() as session:
+            async with session.post(
+                LOGIN_URL, data={"token": TEST_AUTH_TOKEN}, allow_redirects=False
+            ) as login_response:
+                assert login_response.status == 302
+                stale_cookie = login_response.cookies["curu_auth"].value
+
+            async with session.get(
+                BASE_URL, headers={"Authorization": "Bearer wrong", **blocked_client}
+            ) as failed:
+                assert failed.status == 401
+
+            async with session.get(BASE_URL, headers=blocked_client) as probe:
+                assert probe.status == 429, "setup didn't actually block the client"
+
+        down_result = compose("down", timeout=60)
+        assert down_result.returncode == 0, down_result.stderr
+        wait_until_unreachable(timeout=30.0)
+
+        # Second instance: neither the old cookie nor the old block should
+        # carry over.
+        second_up = compose("up", "-d")
+        assert second_up.returncode == 0, second_up.stderr
+        await wait_until_reachable(timeout=180.0)
+
+        async with aiohttp.ClientSession() as session:
+            async with session.get(
+                BASE_URL, cookies={"curu_auth": stale_cookie}
+            ) as stale_cookie_response:
+                assert stale_cookie_response.status == 401, (
+                    "old session cookie was still accepted after restart"
+                )
+
+            async with session.get(
+                BASE_URL, headers=blocked_client
+            ) as fresh_client_response:
+                assert fresh_client_response.status == 401, (
+                    "client was still rate-limited after restart"
+                )

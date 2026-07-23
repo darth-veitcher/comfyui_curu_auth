@@ -169,7 +169,7 @@ identically to a first-ever run.
 again, confirm the fresh instance isn't still rate-limited and issues a
 fresh session.
 
-- [ ] T014-T [US3] Write a FAILING test
+- [x] T014-T [US3] Write a FAILING test
       `test_teardown_and_restart_leaves_no_stale_state` in
       `tests/system/test_docker_harness.py`, adapted from curu's own
       `TestTearDownLeavesNoResidualState` and extended per FR-007: bring
@@ -178,7 +178,7 @@ fresh session.
       instance is not rate-limited and issues a fresh session on login.
       Implements the feature file's "Teardown and restart leave no stale
       state" scenario. **Fails now** — no such assertion exists yet.
-- [ ] T015-I [US3] Implement the teardown/restart assertions so T014-T
+- [x] T015-I [US3] Implement the teardown/restart assertions so T014-T
       passes
 - [ ] T016-T [US3] Write a FAILING test
       `test_second_up_without_down_is_not_destructive` in
