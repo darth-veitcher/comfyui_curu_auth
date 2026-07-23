@@ -18,6 +18,8 @@ from tests.system.conftest import AUTH_HEADERS, BASE_URL, compose, wait_until_re
 
 pytestmark = pytest.mark.system
 
+WS_URL = "ws://localhost:8188/ws"
+
 
 @pytest.fixture(autouse=True)
 def _ensure_torn_down_after_each_test():
@@ -59,3 +61,17 @@ class TestHarnessBootsAndGateEnforces:
                 headers={**AUTH_HEADERS, "X-Forwarded-For": "203.0.113.20"},
             ) as authenticated_response:
                 assert authenticated_response.status == 200
+
+
+class TestWebsocketHandshakeIsGated:
+    """Witness: feature scenario "The websocket handshake is gated too"
+    (spec.md US2, Acceptance Scenario 1's /ws-specific claim)."""
+
+    async def test_websocket_handshake_is_gated(self, running_harness: str) -> None:
+        async with aiohttp.ClientSession() as session:
+            with pytest.raises(aiohttp.WSServerHandshakeError) as exc_info:
+                async with session.ws_connect(
+                    WS_URL, headers={"X-Forwarded-For": "203.0.113.30"}
+                ):
+                    pass
+            assert exc_info.value.status == 401

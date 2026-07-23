@@ -119,13 +119,13 @@ poking.
 **Independent Test**: Run the suite against a harness already up from US1;
 confirm it exits non-zero if the gate is temporarily broken.
 
-- [ ] T009-T [US2] Write a FAILING test `test_websocket_handshake_is_gated`
+- [x] T009-T [US2] Write a FAILING test `test_websocket_handshake_is_gated`
       in `tests/system/test_docker_harness.py`: an unauthenticated
       `aiohttp.ClientSession.ws_connect("ws://localhost:8188/ws")` MUST be
       rejected. Implements the feature file's "The websocket handshake is
       gated too" scenario. **Fails now** — no ws-connect assertion exists
       yet in the suite.
-- [ ] T010-I [US2] Implement the ws-connect helper/assertion (expect
+- [x] T010-I [US2] Implement the ws-connect helper/assertion (expect
       `WSServerHandshakeError` or equivalent rejection before upgrade) so
       T009-T passes
 - [ ] T011-T [US2] Write a FAILING test
