@@ -56,19 +56,27 @@ def port_reachable(host: str = "localhost", port: int = COMFYUI_PORT) -> bool:
 
 
 async def wait_until_reachable(timeout: float = 180.0, interval: float = 2.0) -> float:
-    """Poll ``HEALTH_URL`` until it answers with *any* HTTP response, or
-    raise after ``timeout``. Returns the elapsed time in seconds.
+    """Poll ``HEALTH_URL`` (authenticated with the fixed test credential)
+    until it answers with *any* HTTP response, or raise after ``timeout``.
+    Returns the elapsed time in seconds.
 
-    Deliberately treats both 200 and 401 as "reachable" here -- this helper
-    only answers "is the port up and speaking HTTP yet", not "is the gate
-    correctly enforcing". That second question is asserted explicitly by
-    the tests that call this helper (e.g.
-    ``test_harness_boots_and_gate_enforces``), which is the right place
-    for it: a 200 here just means this helper returns sooner, and the
-    test's own next assertion (expects 401 unauthenticated) fails loudly
-    and specifically if the gate isn't actually active. Contrast with
-    ``docker/comfyui/healthcheck.py``, which has no such follow-up
-    assertion and therefore MUST require 401 specifically (FR-004).
+    Deliberately authenticates rather than polling unauthenticated: every
+    unauthenticated request -- including polling/health-probe traffic --
+    counts as a failure against ``gate.py``'s ``RateLimiter`` (discovered
+    live: an unauthenticated polling loop puts its own client key into a
+    blocked state after its first "successful" 401, so a test's very next
+    request gets 429 instead of the 401 it expects). Authenticating here
+    means a) this helper still detects reachability regardless of whether
+    the gate is even wired up (a 200 either way), and b) `record_success`
+    clears any prior failure count for this client key, so the caller's
+    own subsequent assertions start from a clean rate-limiter state rather
+    than inheriting pollution from this helper's own polling.
+
+    This helper only answers "is the port up and speaking HTTP yet" -- gate
+    correctness itself is asserted explicitly by the tests that call it.
+    Contrast with ``docker/comfyui/healthcheck.py``, which polls
+    unauthenticated on purpose (it exists specifically to prove the gate
+    rejects that) and accordingly treats 429 as healthy too, not just 401.
 
     Polling, not sleeping-and-hoping, so the bound is on actual readiness,
     not a guessed sleep duration. 180s default matches SC-001's revised,
@@ -82,10 +90,14 @@ async def wait_until_reachable(timeout: float = 180.0, interval: float = 2.0) ->
         while time.monotonic() < deadline:
             try:
                 async with session.get(
-                    HEALTH_URL, timeout=aiohttp.ClientTimeout(total=5.0)
+                    HEALTH_URL,
+                    headers=AUTH_HEADERS,
+                    timeout=aiohttp.ClientTimeout(total=5.0),
                 ) as response:
-                    if response.status in (200, 401):
-                        return time.monotonic() - start
+                    # Any response at all (whatever its status) means the
+                    # port is up and ComfyUI is speaking HTTP.
+                    response.release()
+                    return time.monotonic() - start
             except (TimeoutError, aiohttp.ClientError) as exc:
                 last_error = exc
             await asyncio.sleep(interval)

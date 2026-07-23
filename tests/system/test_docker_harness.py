@@ -39,11 +39,23 @@ class TestHarnessBootsAndGateEnforces:
         elapsed = await wait_until_reachable(timeout=180.0)
         assert elapsed < 180.0
 
+        # Distinct X-Forwarded-For per check, not just distinct assertions:
+        # gate.py rate-limits per client_key, and even a *correct*
+        # credential is rejected while that key is blocked (documented
+        # behavior). Checking unauthenticated-rejected and
+        # credential-succeeds back-to-back on the same identity means the
+        # first check's own recorded "failure" blocks the second. The spec
+        # describes these as independent Given/When/Then scenarios, not a
+        # sequential flow for one client -- distinct simulated identities
+        # keep them properly isolated (research.md).
         async with aiohttp.ClientSession() as session:
-            async with session.get(BASE_URL) as unauthenticated_response:
+            async with session.get(
+                BASE_URL, headers={"X-Forwarded-For": "203.0.113.10"}
+            ) as unauthenticated_response:
                 assert unauthenticated_response.status == 401
 
             async with session.get(
-                BASE_URL, headers=AUTH_HEADERS
+                BASE_URL,
+                headers={**AUTH_HEADERS, "X-Forwarded-For": "203.0.113.20"},
             ) as authenticated_response:
                 assert authenticated_response.status == 200

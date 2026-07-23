@@ -166,6 +166,42 @@ appears, without checking growth — rejected; that's a materially weaker
 witness of FR-005 than what the spec's Acceptance Scenario actually
 claims ("increasing backoff").
 
+## Discovered during implementation: unauthenticated polling self-rate-limits
+
+**What happened**: `gate.py`'s `build_gate_middleware` calls
+`rate_limiter.record_failure` on *any* unauthenticated request, including
+a bare `GET /` with no `Authorization` header at all -- there's no
+carve-out for "this looks like a health probe." `T005-T`'s first run
+against the real harness got `429` instead of the expected `401` on its
+very first assertion, because `wait_until_reachable`'s own unauthenticated
+polling loop had already recorded a failure and put its own client key
+into a (brief) blocked state moments earlier. The same mechanism means
+`docker/comfyui/healthcheck.py`'s own repeated unauthenticated probe
+(every 10s, forever, for as long as the container runs) eventually pushes
+itself into a permanently-blocked state too (backoff grows past the probe
+interval), which would flap a correctly-gated instance to "unhealthy" if
+the healthcheck only accepted 401.
+
+**Fix applied**:
+- `wait_until_reachable` now authenticates with the fixed test credential
+  rather than polling unauthenticated. This both still detects
+  reachability (a response either way) and, via `record_success`, clears
+  any failure count for its client key before the caller's own assertions
+  run -- so a test's explicit 401/429 checks start from a clean state
+  rather than inheriting pollution from this helper's own polling.
+- `healthcheck.py` accepts 429 alongside 401 as healthy — a 429 is still
+  definitive proof the gate is actively enforcing (rejecting this probe
+  via the rate limiter rather than the credential check), just not via
+  the specific mechanism a fresh 401 would show. Only 200 (ungated) or a
+  connection failure remain unhealthy.
+
+**Consequence for T011/T012 (rate-limit backoff test)**: this test's own
+authenticated setup calls (e.g. any `wait_until_reachable` call before it)
+no longer contaminate the failure count it's about to exercise, since
+those calls now succeed and reset state. The test can assume a clean
+slate for its own client key when it starts deliberately failing
+credentials.
+
 ## Decision: No `contracts/` directory
 
 **Rationale**: The Phase 1 template skips `contracts/` for "purely
