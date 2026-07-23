@@ -42,3 +42,4 @@ _No active bullets._
 | ADR | Title | Status |
 |---|---|---|
 | [ADR-001](../../ADRs/ADR-001-docker-comfyui-test-harness.md) | Docker-based local ComfyUI test harness, adapted from curu's own | Unknown |
+| [ADR-002](../../ADRs/ADR-002-oidc-session-sharing-and-test-idp.md) | OIDC shares the existing session mechanism; Authelia (Lite) as the local test IdP | Unknown |

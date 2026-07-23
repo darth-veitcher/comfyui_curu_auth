@@ -31,6 +31,7 @@ not in any single spec.md. Create ADRs in `project-management/ADRs/`
 (MADR format) and link them below._
 
 - [ADR-001](../../ADRs/ADR-001-docker-comfyui-test-harness.md) — the harness this epic's Authelia extension builds on top of
+- [ADR-002](../../ADRs/ADR-002-oidc-session-sharing-and-test-idp.md) — OIDC shares the existing SessionStore/cookie mechanism; Authelia (Lite bundle) is the test IdP
 
 ## Success criteria
 - Operator can configure an OIDC provider (client id/secret, issuer URL)
@@ -51,16 +52,14 @@ not in any single spec.md. Create ADRs in `project-management/ADRs/`
   already runs
 
 ## Notes
-When this epic starts, extend `local-test-harness`'s docker-compose with an
-Authelia container (lightweight, self-hosted OIDC provider) to serve as the
-test IdP for automated OIDC-flow tests — flagged during epic planning
-(2026-07-23) at the user's suggestion, not yet built.
+**Resolved (2026-07-23, ADR-002)**: both open questions this epic was
+blocked on are now decided. OIDC logins share the existing `SessionStore`/
+`curu_auth` cookie mechanism (no new session primitive), and Authelia's
+**Lite** bundle (file-based users, SQLite, no Postgres/Redis) is the test
+IdP extending `local-test-harness`'s `docker-compose.yml` — at the user's
+suggestion during epic planning, confirmed against Authelia's own OpenID
+Provider certification. Ready to move to `/beacon.specify oidc-auth`.
 
-**Before this epic enters BUILD** (flagged by adversarial engineering
-review, 2026-07-23): "landing on the same session-cookie mechanism the
-default credential path uses" (Success Criteria above) is an architectural
-decision — how a second auth method shares `gate.py`'s `SessionStore`/
-cookie — that has no ADR yet, and `project-management/Background/
-01-final-architecture-document.md` is still the unfilled template. Write
-that ADR (and fill in enough of the architecture doc to support it) before
-specs are cut here, not after.
+`project-management/Background/01-final-architecture-document.md` is
+still the unfilled template — noted, but no longer a blocker now that the
+specific decision that needed it (session sharing) has its own ADR.
