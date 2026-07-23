@@ -19,9 +19,9 @@ from gate import (
     LOGIN_PATH,
     RateLimiter,
     SessionStore,
-    _client_key,
     build_gate_middleware,
     build_login_routes,
+    client_key,
     generate_credential,
     resolve_credential,
 )
@@ -693,7 +693,7 @@ def _fake_request(
 
 
 class TestClientKey:
-    """`_client_key`'s own real-deployment bug (T{n}): `request.remote`
+    """`client_key`'s own real-deployment bug (T{n}): `request.remote`
     behind a reverse proxy (verified live against RunPod's own
     Cloudflare-fronted proxy.runpod.net) is the proxy's own connecting
     address, not a stable per-client value -- it silently defeated
@@ -704,12 +704,12 @@ class TestClientKey:
         request = _fake_request(
             headers={"X-Forwarded-For": "203.0.113.7, 10.0.0.1, 10.0.0.2"}
         )
-        assert _client_key(request) == "203.0.113.7"
+        assert client_key(request) == "203.0.113.7"
 
     def test_falls_back_to_request_remote_when_the_header_is_absent(self) -> None:
         request = _fake_request(remote="198.51.100.9")
-        assert _client_key(request) == "198.51.100.9"
+        assert client_key(request) == "198.51.100.9"
 
     def test_falls_back_to_unknown_when_neither_is_available(self) -> None:
         request = _fake_request(remote=None)
-        assert _client_key(request) == "unknown"
+        assert client_key(request) == "unknown"

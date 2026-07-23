@@ -81,6 +81,7 @@ def build_gate_middleware(
     *,
     sessions: SessionStore | None = None,
     rate_limiter: RateLimiter | None = None,
+    public_paths: frozenset[str] | set[str] | None = None,
 ) -> Middleware:
     """Return an aiohttp ``@web.middleware`` function that rejects any
     request lacking ``credential`` -- as ``Authorization: Bearer
@@ -91,8 +92,19 @@ def build_gate_middleware(
     route on the app it's installed into, including a websocket route's
     own initial handshake, verified directly against ComfyUI's own
     ``server.py`` (every route it registers shares one ``app``/``routes``
-    object). ``LOGIN_PATH`` itself is always let through unauthenticated
-    -- see its own docstring for why.
+    object).
+
+    ``public_paths`` (default ``None``, treated as ``{LOGIN_PATH}``) is
+    the small, explicit set of routes let through unauthenticated --
+    every one of them reachable pre-session by definition, the same
+    chicken-and-egg reason ``LOGIN_PATH`` itself always has been (see its
+    own docstring). A second additive auth method (e.g. an OIDC
+    start/callback pair) registers its own pre-session routes by
+    supplying a wider set here, rather than a second special-cased path
+    check -- ADR-003. Deliberately an explicit set, not a prefix rule:
+    anyone widening it is making a conscious, reviewable edit, not
+    relying on a pattern-match that could silently exempt an unrelated
+    future route from Total Route Coverage.
 
     ``sessions=None`` (the default) disables cookie auth entirely --
     every pre-browser-login caller/test of this function keeps its exact
@@ -126,10 +138,11 @@ def build_gate_middleware(
     """
 
     expected_header = f"Bearer {credential}".encode("latin-1")
+    resolved_public_paths = public_paths if public_paths is not None else {LOGIN_PATH}
 
     @web.middleware
     async def gate(request: web.Request, handler: Handler) -> web.StreamResponse:
-        if request.path == LOGIN_PATH:
+        if request.path in resolved_public_paths:
             return await handler(request)
 
         if sessions is not None:
@@ -137,10 +150,10 @@ def build_gate_middleware(
             if supplied_cookie and sessions.is_valid(supplied_cookie):
                 return await handler(request)
 
-        client_key = _client_key(request)
+        key = client_key(request)
 
         if rate_limiter is not None:
-            retry_after = rate_limiter.seconds_until_retry(client_key)
+            retry_after = rate_limiter.seconds_until_retry(key)
             if retry_after > 0:
                 seconds = int(retry_after) + 1
                 if "text/html" in request.headers.get("Accept", ""):
@@ -158,15 +171,15 @@ def build_gate_middleware(
         supplied_header = request.headers.get("Authorization", "").encode("latin-1")
         if secrets.compare_digest(supplied_header, expected_header):
             if rate_limiter is not None:
-                rate_limiter.record_success(client_key)
+                rate_limiter.record_success(key)
             return await handler(request)
 
         if rate_limiter is not None:
-            rate_limiter.record_failure(client_key)
+            rate_limiter.record_failure(key)
 
         _logger.warning(
             "comfyui_curu_auth: authentication failure from %s (%s %s)",
-            client_key,
+            key,
             request.method,
             request.path,
         )
@@ -450,7 +463,7 @@ def _render_login_page(*, message: str = "", retry_after: int | None = None) -> 
     return _LOGIN_PAGE_TEMPLATE.format(message=message, login_path=LOGIN_PATH)
 
 
-def _client_key(request: web.Request) -> str:
+def client_key(request: web.Request) -> str:
     """The identity :class:`RateLimiter` keys backoff on for one request.
 
     Prefers ``X-Forwarded-For``'s first (left-most, closest-to-client)
@@ -509,8 +522,8 @@ def build_login_routes(
         return web.Response(text=_render_login_page(), content_type="text/html")
 
     async def login_post(request: web.Request) -> web.StreamResponse:
-        client_key = _client_key(request)
-        retry_after = limiter.seconds_until_retry(client_key)
+        key = client_key(request)
+        retry_after = limiter.seconds_until_retry(key)
         if retry_after > 0:
             # The styled login page, not a bare JSON body: this route is
             # only ever reached by a real browser form submission (no
@@ -527,10 +540,10 @@ def build_login_routes(
         data = await request.post()
         supplied = str(data.get("token", "")).encode("latin-1", errors="ignore")
         if not supplied or not secrets.compare_digest(supplied, expected):
-            limiter.record_failure(client_key)
+            limiter.record_failure(key)
             _logger.warning(
                 "comfyui_curu_auth: authentication failure from %s (login form)",
-                client_key,
+                key,
             )
             return web.Response(
                 text=_render_login_page(message="<p>Incorrect credential.</p>"),
@@ -538,7 +551,7 @@ def build_login_routes(
                 status=401,
             )
 
-        limiter.record_success(client_key)
+        limiter.record_success(key)
         session_token = sessions.issue()
         redirect = web.HTTPFound("/")
         redirect.set_cookie(
@@ -564,5 +577,6 @@ __all__ = [
     "SessionStore",
     "build_gate_middleware",
     "build_login_routes",
+    "client_key",
     "generate_credential",
 ]
