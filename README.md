@@ -95,11 +95,22 @@ uv run pytest
 
 `gate.py`'s logic (credential generation, the middleware, sessions, rate
 limiting) runs against a real, minimal `aiohttp.web.Application` via
-`aiohttp.test_utils` — no ComfyUI installation needed. `__init__.py`
-itself (the real ComfyUI-side wiring) has no automated test — it needs a
-running `server.PromptServer.instance` that only exists inside an actual
-ComfyUI process — and is verified by installing this node for real and
-confirming the credential prints and the gate enforces it.
+`aiohttp.test_utils` — no ComfyUI installation needed.
+
+`__init__.py` itself (the real ComfyUI-side wiring) has its own opt-in,
+live test suite instead of only a by-hand check:
+
+```bash
+uv run pytest -m system
+```
+
+Brings up a real, CPU-only ComfyUI instance in Docker (this repo's own
+working tree installed as the custom node — see
+[`specs/001-docker-comfyui-harness/quickstart.md`](specs/001-docker-comfyui-harness/quickstart.md))
+and verifies the gate against it directly: unauthenticated rejection on
+HTTP routes and the `/ws` handshake, correct-credential success, rate-limit
+backoff, and clean teardown/restart. Never runs as part of the plain
+`uv run pytest` above — opt-in only, and no GPU/rendering involved.
 
 ## Origin
 

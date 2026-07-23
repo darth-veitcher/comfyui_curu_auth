@@ -194,10 +194,10 @@ fresh session.
 
 ## Phase 6: Polish & Cross-Cutting Concerns
 
-- [ ] T018 [P] Update README.md's "Tests" section to mention
+- [x] T018 [P] Update README.md's "Tests" section to mention
       `uv run pytest -m system` as the opt-in live-harness suite, linking to
       `specs/001-docker-comfyui-harness/quickstart.md`
-- [ ] T019 Manually walk through `quickstart.md` end-to-end (up, run suite,
+- [x] T019 Manually walk through `quickstart.md` end-to-end (up, run suite,
       tear down, up again) and correct any drift between it and actual
       behavior
 - [ ] T020 [P] `beacon doctor --strict` clean before calling this feature's

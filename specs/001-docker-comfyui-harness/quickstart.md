@@ -36,6 +36,19 @@ docker compose down
 Run `docker compose up -d` again afterward to confirm no leftover state
 (spec SC-004) — startup should behave identically to the first run.
 
+## Known quirk: the "gate active" banner doesn't appear in `docker compose logs`
+
+`__init__.py`'s own `print("comfyui-curu-auth gate active...")` line
+doesn't show up in this harness's container logs — ComfyUI's custom-node
+loader appears to capture/discard stdout during its own import-timing
+measurement (`Import times for custom nodes:`), while `logging.warning`
+calls made later, at request time, aren't affected and do show up (visible
+as `authentication failure from ...` lines once traffic hits the gate).
+Confirmed live (2026-07-23) during `quickstart.md` validation. Not a
+defect in the gate itself — this harness never needs to scrape the
+credential from logs anyway, since `COMFYUI_CURU_AUTH_TOKEN` pins it to a
+known value — but worth knowing if you go looking for that banner by hand.
+
 ## What this does NOT do
 
 - Does not execute any ComfyUI workflow, load a model checkpoint, or
