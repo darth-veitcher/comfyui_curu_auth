@@ -1,0 +1,32 @@
+services:
+  comfyui:
+    build:
+      context: .
+      dockerfile: docker/comfyui/Dockerfile
+    ports:
+      - "8188:8188"
+    environment:
+      - PYTHONUNBUFFERED=1
+      # Fixed test credential (spec FR-003) -- tests/system/conftest.py's
+      # TEST_AUTH_TOKEN must match this exactly. Never used outside this
+      # local, disposable harness -- a real deployment leaves this unset
+      # and gets comfyui_curu_auth's own default: a fresh random credential
+      # per restart (resolve_credential's own docstring).
+      - COMFYUI_CURU_AUTH_TOKEN=local-harness-test-credential
+    volumes:
+      # Bind-mounts this repo's own working tree -- not a build-time COPY
+      # or a git clone of a published release (contrast with
+      # ~/repos/JAMESVEITCH/curu's own equivalent harness). Read-only: this
+      # container only ever loads this node, never writes to it. Absolute
+      # container-side path matching where the Dockerfile clones ComfyUI
+      # (a relative path here would silently mount nowhere ComfyUI's
+      # custom-node loader looks). See research.md's bind-mount decision.
+      - .:/app/ComfyUI/custom_nodes/comfyui_curu_auth:ro
+    # No GPU device reservations -- CPU-only harness (epic Non-Goals).
+    # Purpose: prove the auth gate, not inference/rendering.
+    healthcheck:
+      test: ["CMD", "python", "healthcheck.py"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 60s
