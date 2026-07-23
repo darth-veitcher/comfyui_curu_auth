@@ -24,9 +24,9 @@ gantt
 
 | Epic | Title | Status | Specs | Fidelity |
 |---|---|---|---|---|
-| [browser-e2e](project-management/Roadmap/epics/browser-e2e.md) | Browser-driven E2E harness (Playwright + virtual authenticator) | Planning | — | S? A? T:- |
-| [local-test-harness](project-management/Roadmap/epics/local-test-harness.md) | CPU-only Docker integration harness for ComfyUI + this node | Planning | 0/1 shipped | S+ A? T:0% |
-| [oidc-auth](project-management/Roadmap/epics/oidc-auth.md) | Optional OIDC/OAuth login path | Planning | — | S? A? T:- |
+| [browser-e2e](project-management/Roadmap/epics/browser-e2e.md) | Browser-driven E2E harness (Playwright + virtual authenticator) | Planning | — | S? A+ T:- |
+| [local-test-harness](project-management/Roadmap/epics/local-test-harness.md) | CPU-only Docker integration harness for ComfyUI + this node | Planning | 0/1 shipped | S+ A+ T:95% |
+| [oidc-auth](project-management/Roadmap/epics/oidc-auth.md) | Optional OIDC/OAuth login path | Planning | — | S? A+ T:- |
 | [passkey-auth](project-management/Roadmap/epics/passkey-auth.md) | Passwordless WebAuthn/passkey login | Planning | — | S? A? T:- |
 
 _Fidelity: `S+/S?` = has specs / none · `A+/A?` = has ADRs / none · `T:N%` = task completion_
@@ -35,4 +35,10 @@ _Fidelity: `S+/S?` = has specs / none · `A+/A?` = has ADRs / none · `T:N%` = t
 
 **local-test-harness**
 
-- `001-docker-comfyui-harness` — Register the `system` pytest marker and add `-m "not system"` to
+- `001-docker-comfyui-harness` — [P] `beacon doctor --strict` clean before calling this feature's
+
+## Architectural Decisions
+
+| ADR | Title | Status |
+|---|---|---|
+| [ADR-001](../../ADRs/ADR-001-docker-comfyui-test-harness.md) | Docker-based local ComfyUI test harness, adapted from curu's own | Unknown |

@@ -30,7 +30,7 @@ BEACON DESIGN-phase activity; the architectural choices that span specs
 not in any single spec.md. Create ADRs in `project-management/ADRs/`
 (MADR format) and link them below._
 
-<!-- - project-management/ADRs/ADR-NNN-decision-title.md -->
+- [ADR-001](../../ADRs/ADR-001-docker-comfyui-test-harness.md) — the harness this epic's Authelia extension builds on top of
 
 ## Success criteria
 - Operator can configure an OIDC provider (client id/secret, issuer URL)

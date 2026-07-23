@@ -34,7 +34,7 @@ BEACON DESIGN-phase activity; the architectural choices that span specs
 not in any single spec.md. Create ADRs in `project-management/ADRs/`
 (MADR format) and link them below._
 
-<!-- - project-management/ADRs/ADR-NNN-decision-title.md -->
+- [ADR-001](../../ADRs/ADR-001-docker-comfyui-test-harness.md) — explains why this epic can't just extend the harness's HTTP/WS-only test layer for WebAuthn
 
 ## Success criteria
 - A browser (Playwright), driven against the `local-test-harness` ComfyUI

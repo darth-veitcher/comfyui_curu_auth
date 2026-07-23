@@ -32,7 +32,7 @@ BEACON DESIGN-phase activity; the architectural choices that span specs
 not in any single spec.md. Create ADRs in `project-management/ADRs/`
 (MADR format) and link them below._
 
-<!-- - project-management/ADRs/ADR-NNN-decision-title.md -->
+- [ADR-001](../../ADRs/ADR-001-docker-comfyui-test-harness.md) — Docker-based local ComfyUI test harness, adapted from curu's own
 
 ## Success criteria
 - `docker compose up` brings up a real, CPU-only ComfyUI instance with

@@ -200,8 +200,11 @@ fresh session.
 - [x] T019 Manually walk through `quickstart.md` end-to-end (up, run suite,
       tear down, up again) and correct any drift between it and actual
       behavior
-- [ ] T020 [P] `beacon doctor --strict` clean before calling this feature's
-      bullets done
+- [x] T020 [P] `beacon doctor --strict` clean before calling this feature's
+      bullets done. **Done (2026-07-23)**: added ADR-001 (harness design,
+      shared by oidc-auth/browser-e2e) to clear `adr-coverage`. Remaining
+      `epic-gates` warning is expected -- browser-e2e/oidc-auth/passkey-auth
+      correctly have no specs yet, since that work hasn't started.
 
 ---
 
