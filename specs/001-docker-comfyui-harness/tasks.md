@@ -180,13 +180,13 @@ fresh session.
       state" scenario. **Fails now** — no such assertion exists yet.
 - [x] T015-I [US3] Implement the teardown/restart assertions so T014-T
       passes
-- [ ] T016-T [US3] Write a FAILING test
+- [x] T016-T [US3] Write a FAILING test
       `test_second_up_without_down_is_not_destructive` in
       `tests/system/test_docker_harness.py`, adapted from curu's own
       `TestIdempotentUp` (spec Edge Case: a second `up` without an
       intervening `down` must not fail destructively or start a duplicate
       container). **Fails now** — no such assertion exists yet.
-- [ ] T017-I [US3] Implement the idempotent-up assertions so T016-T passes
+- [x] T017-I [US3] Implement the idempotent-up assertions so T016-T passes
 
 **Checkpoint**: All three user stories independently functional.
 

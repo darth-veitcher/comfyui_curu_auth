@@ -177,3 +177,24 @@ class TestTeardownAndRestartLeavesNoStaleState:
                 assert fresh_client_response.status == 401, (
                     "client was still rate-limited after restart"
                 )
+
+
+class TestSecondUpWithoutDownIsNotDestructive:
+    """Witness: spec.md Edge Case -- "a second `up` without an intervening
+    `down` must not fail destructively or silently start a second
+    conflicting instance" (adapted from curu's own TestIdempotentUp)."""
+
+    async def test_second_up_without_down_is_not_destructive(self) -> None:
+        first_up = compose("up", "-d")
+        assert first_up.returncode == 0, first_up.stderr
+        await wait_until_reachable(timeout=180.0)
+
+        second_up = compose("up", "-d")
+        assert second_up.returncode == 0, second_up.stderr
+
+        ps = compose("ps", "-a", "--format", "{{.Names}}")
+        names = [line for line in ps.stdout.splitlines() if line.strip()]
+        assert len(names) == 1, f"expected exactly one container, found: {names}"
+
+        elapsed = await wait_until_reachable(timeout=30.0)
+        assert elapsed < 30.0
