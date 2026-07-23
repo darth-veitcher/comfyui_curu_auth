@@ -11,6 +11,8 @@ noted per test via docstring.
 
 from __future__ import annotations
 
+import asyncio
+
 import aiohttp
 import pytest
 
@@ -75,3 +77,40 @@ class TestWebsocketHandshakeIsGated:
                 ):
                     pass
             assert exc_info.value.status == 401
+
+
+class TestRepeatedWrongCredentialsTriggerBackoff:
+    """Witness: feature scenario "Repeated wrong credentials trigger
+    backoff" (spec.md US2, Acceptance Scenario 3).
+
+    Does NOT hammer the wrong credential in a tight loop -- gate.py's
+    RateLimiter checks the block *before* the credential comparison, so a
+    deliberate failure only ever returns 401 (the block it sets applies to
+    the *next* request, not this one); an immediate follow-up "probe" (any
+    headers, while still blocked) is what returns 429 with the current
+    Retry-After, and critically does NOT itself count as a failure -- the
+    block-check short-circuits before record_failure is ever reached. This
+    lets each cycle read the growing Retry-After without disturbing the
+    count it's trying to observe (research.md's pacing decision).
+    """
+
+    async def test_repeated_wrong_credentials_trigger_backoff(
+        self, running_harness: str
+    ) -> None:
+        client_id = {"X-Forwarded-For": "203.0.113.40"}
+        wrong_credential = {"Authorization": "Bearer wrong-credential", **client_id}
+
+        retry_afters: list[int] = []
+        async with aiohttp.ClientSession() as session:
+            for _ in range(3):
+                async with session.get(BASE_URL, headers=wrong_credential) as failed:
+                    assert failed.status == 401
+
+                async with session.get(BASE_URL, headers=client_id) as probe:
+                    assert probe.status == 429
+                    retry_afters.append(int(probe.headers["Retry-After"]))
+
+                await asyncio.sleep(retry_afters[-1] + 0.2)
+
+        assert retry_afters[1] > retry_afters[0], retry_afters
+        assert retry_afters[2] > retry_afters[1], retry_afters

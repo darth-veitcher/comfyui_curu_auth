@@ -128,7 +128,7 @@ confirm it exits non-zero if the gate is temporarily broken.
 - [x] T010-I [US2] Implement the ws-connect helper/assertion (expect
       `WSServerHandshakeError` or equivalent rejection before upgrade) so
       T009-T passes
-- [ ] T011-T [US2] Write a FAILING test
+- [x] T011-T [US2] Write a FAILING test
       `test_repeated_wrong_credentials_trigger_backoff` in
       `tests/system/test_docker_harness.py`. **Must NOT hammer the wrong
       credential in a tight loop** — `gate.py`'s `RateLimiter` only calls
@@ -142,7 +142,7 @@ confirm it exits non-zero if the gate is temporarily broken.
       comparisons, not exact second values. Implements the feature file's
       "Repeated wrong credentials trigger backoff" scenario. **Fails now**
       — no repeated-failure helper exists yet.
-- [ ] T012-I [US2] Implement the paced, block-expiry-aware repeated-failed-
+- [x] T012-I [US2] Implement the paced, block-expiry-aware repeated-failed-
       login helper and backoff-growth assertions so T011-T passes
 - [ ] T013 [US2] One-time manual regression sanity check (not a permanent
       automated task, mirroring curu's own precedent for a
