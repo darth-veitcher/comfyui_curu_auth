@@ -1,5 +1,7 @@
 # comfyui_curu_auth
 
+## What is this
+
 A ComfyUI custom node that puts a bearer-token credential in front of your
 whole ComfyUI backend — every route, including the `/ws` connection its
 progress streaming depends on. No accounts, no config file, no external
@@ -12,8 +14,10 @@ the console. That's the whole setup.
 
 ```bash
 cd /path/to/ComfyUI/custom_nodes
-git clone <this-repo-url> comfyui_curu_auth
+git clone https://github.com/darth-veitcher/comfyui_curu_auth
 ```
+
+## Quickstart
 
 Restart ComfyUI:
 

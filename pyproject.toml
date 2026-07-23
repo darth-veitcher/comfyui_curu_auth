@@ -6,6 +6,10 @@ readme = "README.md"
 requires-python = ">=3.12"
 dependencies = ["aiohttp>=3.9"]
 
+[project.urls]
+Repository = "https://github.com/darth-veitcher/comfyui_curu_auth"
+Documentation = "https://github.com/darth-veitcher/comfyui_curu_auth#readme"
+
 [dependency-groups]
 dev = ["pytest>=8.2", "pytest-asyncio>=0.24", "ruff>=0.6", "ty>=0.0.1a1"]
 
