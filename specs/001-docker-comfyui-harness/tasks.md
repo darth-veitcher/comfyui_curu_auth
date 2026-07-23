@@ -30,11 +30,11 @@ Single project — `docker/`, root `docker-compose.yml`, `tests/system/` per
 
 ## Phase 1: Setup (Shared Infrastructure)
 
-- [ ] T001 Register the `system` pytest marker and add `-m "not system"` to
+- [x] T001 Register the `system` pytest marker and add `-m "not system"` to
       `addopts` in `pyproject.toml` (verbatim convention from
       `~/repos/JAMESVEITCH/curu`'s `pyproject.toml` — research.md), so the
       suite this feature adds is opt-in per FR-006 from the moment it exists
-- [ ] T002 [P] Create `tests/system/` directory with empty `conftest.py` and
+- [x] T002 [P] Create `tests/system/` directory with empty `conftest.py` and
       `test_docker_harness.py` stubs
 
 ---
@@ -44,12 +44,12 @@ Single project — `docker/`, root `docker-compose.yml`, `tests/system/` per
 **⚠️ CRITICAL**: No user story work can begin until this phase is complete —
 every story's tests drive the harness through these helpers.
 
-- [ ] T003 Implement a `compose(*args, timeout=None)` subprocess helper
+- [x] T003 Implement a `compose(*args, timeout=None)` subprocess helper
       (wraps `docker compose <args>`, returns a `CompletedProcess`) in
       `tests/system/conftest.py` — this one can follow the *shape* of
       curu's own `conftest.py` helper of the same name closely, since
       subprocess wrapping has no dependency conflict
-- [ ] T004 Implement `wait_until_reachable(timeout=180)` /
+- [x] T004 Implement `wait_until_reachable(timeout=180)` /
       `wait_until_unreachable(timeout)` polling helpers in
       `tests/system/conftest.py`, written **fresh against
       `aiohttp.ClientSession`** — NOT ported from curu's own equivalent,
@@ -71,7 +71,7 @@ gate.
 **Independent Test**: Bring the harness up by hand; confirm an
 unauthenticated request 401s and the fixed test credential succeeds.
 
-- [ ] T005-T [US1] Write a FAILING test `test_harness_boots_and_gate_enforces`
+- [x] T005-T [US1] Write a FAILING test `test_harness_boots_and_gate_enforces`
       in `tests/system/test_docker_harness.py`: `compose("up", "-d")`
       succeeds, `wait_until_reachable` returns under a 180s timeout (SC-001 —
       see research.md's "Pace the rate-limit..." sibling note on realistic
@@ -81,20 +81,23 @@ unauthenticated request 401s and the fixed test credential succeeds.
       instance", "Unauthenticated HTTP requests are rejected", and "The
       fixed test credential succeeds" scenarios. **Fails now** — no
       `docker-compose.yml` or Dockerfile exist yet, so `compose up` errors.
-- [ ] T006 [P] [US1] Implement `docker/comfyui/Dockerfile`: CPU-only ComfyUI
+- [x] T006 [P] [US1] Implement `docker/comfyui/Dockerfile`: CPU-only ComfyUI
       at a pinned tag (same tag as curu's own harness — research.md), CPU
       torch wheels, no checkpoint generation step, `EXPOSE 8188`, `CMD`
       running the persistent server (`--cpu --listen 0.0.0.0 --port 8188`).
       Note the ComfyUI dependency footgun curu's own Dockerfile already
       documents at this tag (a `pip install requests` needed beyond
       `requirements.txt`) — expect similar iteration here.
-- [ ] T007 [P] [US1] Implement `docker/comfyui/healthcheck.py`: **NOT** a
+- [x] T007 [P] [US1] Implement `docker/comfyui/healthcheck.py`: **NOT** a
       verbatim copy of curu's own (which treats 200 as healthy too — wrong
-      here, see research.md's healthcheck decision). This version MUST exit
-      non-zero (unhealthy) on 200 and exit 0 (healthy) only on 401, so a
-      failed/unmounted bind mount (FR-002) reports unhealthy instead of
-      silently passing as an ungated instance (FR-004).
-- [ ] T008-I [US1] Implement root `docker-compose.yml`: single `comfyui`
+      here, see research.md's healthcheck decision). This version exits
+      non-zero (unhealthy) on 200 and exit 0 (healthy) on 401 **or 429**, so
+      a failed/unmounted bind mount (FR-002) reports unhealthy instead of
+      silently passing as an ungated instance (FR-004). 429 was added after
+      discovering live that this check's own repeated unauthenticated
+      probing eventually rate-limits itself too — still proof the gate is
+      enforcing, not evidence it's missing (research.md).
+- [x] T008-I [US1] Implement root `docker-compose.yml`: single `comfyui`
       service building T006's Dockerfile, port `8188:8188`, no GPU device
       reservation, bind-mounts this repo's root read-only to the **absolute**
       in-container path `/app/ComfyUI/custom_nodes/comfyui_curu_auth` (FR-002
