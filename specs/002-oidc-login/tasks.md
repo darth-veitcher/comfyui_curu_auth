@@ -41,12 +41,12 @@ Single project — `oidc.py` (new), `gate.py` (two changes), `__init__.py`
 
 ## Phase 1: Setup (Shared Infrastructure)
 
-- [ ] T001 Add `joserfc` to `dependencies` in `pyproject.toml` (research.md —
+- [x] T001 Add `joserfc` to `dependencies` in `pyproject.toml` (research.md —
       the one new dependency this spec adds, scoped to ID-token JWK/JWT
       verification only)
-- [ ] T002 [P] Create `tests/test_oidc.py` stub (hermetic suite, mirrors
+- [x] T002 [P] Create `tests/test_oidc.py` stub (hermetic suite, mirrors
       `tests/test_gate.py`'s existing structure and conventions)
-- [ ] T003 [P] Create `tests/system/test_oidc_harness.py` stub (`system`-
+- [x] T003 [P] Create `tests/system/test_oidc_harness.py` stub (`system`-
       marked, mirrors `tests/system/test_docker_harness.py`'s conventions)
 
 ---
@@ -57,32 +57,32 @@ Single project — `oidc.py` (new), `gate.py` (two changes), `__init__.py`
 US1 registers new routes and reuses `client_key` through this phase's
 changes; US2 verifies nothing changes when they aren't used.
 
-- [ ] T004-T Write a FAILING test in `tests/test_oidc.py` asserting
+- [x] T004-T Write a FAILING test in `tests/test_oidc.py` asserting
       `build_gate_middleware` accepts a `public_paths` iterable and lets
       *every* path in it through unauthenticated (not just a single
       `LOGIN_PATH` string) — the ADR-003 generalization. **Fails now** —
       `build_gate_middleware`'s signature has no such parameter yet.
-- [ ] T005-I Generalize `gate.py`'s `LOGIN_PATH` check into a `public_paths`
+- [x] T005-I Generalize `gate.py`'s `LOGIN_PATH` check into a `public_paths`
       parameter (defaulting to `{LOGIN_PATH}` — byte-for-byte today's
       behavior when no extra paths are supplied) so T004-T passes. Run the
       full existing `tests/test_gate.py` suite (44 tests) unmodified
       immediately after this change — every one MUST still pass; this *is*
       the regression guard for FR-004 (default Bearer-header path
       untouched).
-- [ ] T006 Promote `gate._client_key` to a public `client_key` export (add
+- [x] T006 Promote `gate._client_key` to a public `client_key` export (add
       to `__all__`); no behavior change. **Added after adversarial
       engineering review** — `oidc.py`'s US3 work needs the identical
       client-identity function `RateLimiter`/logging already key on, and a
       second real consumer means the leading underscore no longer
       describes reality (research.md). Confirm the existing 44 hermetic
       tests still pass unchanged.
-- [ ] T007-T Write a FAILING test in `tests/test_oidc.py` for
+- [x] T007-T Write a FAILING test in `tests/test_oidc.py` for
       `resolve_oidc_config()`: returns a populated config object when all
       four environment variables (issuer URL, client ID, client secret,
       redirect URI) are present, and `None` when any subset is missing —
       including the partial-configuration edge case (FR-009). **Fails
       now** — `oidc.py` doesn't exist yet.
-- [ ] T008-I Implement `oidc.py`'s `resolve_oidc_config()` so T007-T passes
+- [x] T008-I Implement `oidc.py`'s `resolve_oidc_config()` so T007-T passes
 - [ ] T009 **SPIKE (throwaway — not production code)**. **Added after
       adversarial engineering review**, which flagged this as an
       unvalidated unknown, not a detail to assume away: bring up Authelia
