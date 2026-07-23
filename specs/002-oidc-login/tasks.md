@@ -83,7 +83,7 @@ changes; US2 verifies nothing changes when they aren't used.
       including the partial-configuration edge case (FR-009). **Fails
       now** — `oidc.py` doesn't exist yet.
 - [x] T008-I Implement `oidc.py`'s `resolve_oidc_config()` so T007-T passes
-- [ ] T009 **SPIKE (throwaway — not production code)**. **Added after
+- [x] T009 **SPIKE (throwaway — not production code)**. **Added after
       adversarial engineering review**, which flagged this as an
       unvalidated unknown, not a detail to assume away: bring up Authelia
       (Lite bundle) alone and prove, end to end, that
@@ -107,6 +107,20 @@ changes; US2 verifies nothing changes when they aren't used.
       credential-management APIs, which is a different requirement than
       "Authelia's login portal happens to be a React SPA." Findings
       either way become T010's acceptance notes.
+      **Done (2026-07-23): SPIKE SUCCEEDED, no Playwright needed.** Ran
+      the full sequence against a standalone Authelia v4.39.20 container:
+      `POST /api/firstfactor` → 200 + session cookie;
+      `GET /api/oidc/authorization` with that cookie → 303 straight to
+      `redirect_uri` with `code`/`state`, no consent screen;
+      `POST /api/oidc/token` → 200 with `access_token`/`id_token`; decoded
+      `id_token` claims (`iss`/`aud`/`nonce`) all matched. Two findings
+      feed T010, both recorded in research.md: (1) HTTPS is mandatory for
+      Authelia, confirmed live — the harness will trust a fixed,
+      repo-committed self-signed CA at the OS level, not a TLS-bypass flag
+      in production code; (2) mount Authelia's config as a directory, not
+      individual files (a Docker Desktop bind-mount gotcha hit during the
+      spike). Spike container and all throwaway files cleaned up
+      afterward — nothing from this task persists except these notes.
 - [ ] T010 Extend `docker-compose.yml` with an `authelia` service (Lite
       bundle — file-based user, SQLite storage, no Postgres/Redis;
       ADR-002) and add `docker/authelia/` with its static configuration: a

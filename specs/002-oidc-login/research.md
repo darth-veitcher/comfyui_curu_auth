@@ -120,6 +120,59 @@ WebAuthn virtual-authenticator API needed), which doesn't require or
 justify pulling `browser-e2e`'s own WebAuthn-ceremony tooling forward.
 `browser-e2e`'s reason to exist is unchanged either way.
 
+**SPIKE RESULT (2026-07-23): confirmed working, no Playwright needed.**
+Ran the exact sequence against a standalone Authelia `latest` (v4.39.20)
+container: `POST /api/firstfactor` (200, session cookie set) →
+`GET /api/oidc/authorization` with that cookie (303, straight to the
+registered `redirect_uri` with `code`/`state`/`iss` — no consent screen,
+`consent_mode: implicit` confirmed sufficient) →
+`POST /api/oidc/token` with the code (200, returns `access_token` +
+`id_token`). Decoded the `id_token`: `iss` matched the configured
+`authelia_url` exactly, `aud` matched `client_id`, `nonce` matched what
+was sent. The entire authorization-code flow is headlessly scriptable
+with nothing beyond `curl`/`aiohttp` — T028's live test can proceed
+exactly as planned.
+
+Two real findings from getting the spike running, both feeding T010:
+
+1. **HTTPS is mandatory for Authelia itself, confirmed, not optional for
+   local testing** — verified live (`session: domain config #1: option
+   'authelia_url' does not have a secure scheme`). A bare `http://` config
+   refuses to start at all. See the new TLS-trust decision below for how
+   the harness satisfies this without weakening production `oidc.py` code.
+2. **The session cookie `domain` must contain a dot or be an IP address**
+   — Authelia rejects a bare `localhost` (`option 'domain' is not a valid
+   cookie domain`). Not relevant to the final container-network harness
+   (which uses the `authelia` service hostname, which *does* contain
+   meaning as a Compose network alias — but doesn't literally contain a
+   dot either, so T010 needs to verify this against the real hostname
+   pattern, not assume the IP-address workaround this spike used applies
+   unchanged).
+
+## Decision: The harness trusts a fixed, repo-committed self-signed CA at the OS level — not a TLS-verification bypass in production code
+
+**Rationale**: Since HTTPS is mandatory (confirmed above), `oidc.py`'s
+discovery/token/JWKS fetches need to establish trust with Authelia's
+certificate. The wrong fix would be adding a "skip TLS verification" flag
+to `oidc.py` itself — that's exactly the kind of insecure default a
+security-focused gate must never ship, even gated behind a flag nobody
+would remember to unset. Instead: generate a self-signed CA once,
+committed to the repo under `docker/authelia/` (deterministic, matching
+the "fixed test credential" precedent already established in ADR-002 —
+this CA is meaningless outside this disposable harness), and install it
+into `docker/comfyui/Dockerfile`'s image at build time via the standard
+OS trust-store mechanism (`update-ca-certificates` or equivalent). Python's
+default `ssl` context (what `aiohttp` uses unless told otherwise) already
+trusts the OS store, so `oidc.py` needs zero test-only code paths — the
+exact same discovery/token/JWKS-fetch code that will run against a real,
+publicly-trusted provider in production runs unmodified here too.
+
+**Alternatives considered**: A TLS-verification-bypass flag in `oidc.py`
+(e.g. `verify_ssl=False`) — rejected outright; Constitution Principle I
+(Minimal Attack Surface) does not bend for test convenience, and the
+OS-trust-store approach achieves the same test outcome with zero
+production-code risk.
+
 ## Decision: Reconcile the issuer-URL duality — container-internal hostname for the gate, published host port for the test's simulated "browser"
 
 **Rationale**: Found during adversarial engineering review (2026-07-23) —
@@ -221,6 +274,22 @@ bounds, both cheap:
 costs almost nothing to add as defense in depth against exactly the
 identity-rotation case that already documents itself as a known
 limitation.
+
+## Discovered during the T009 spike: mount Authelia's config as a directory, not individual files
+
+**What happened**: Bind-mounting individual files (`configuration.yml`,
+`users_database.yml`) directly onto container paths that don't already
+exist as files in the base image intermittently got created as
+directories instead by the Docker Desktop macOS VM layer — a known class
+of Docker bind-mount gotcha, worse once a path has been mounted once
+(subsequent mounts of the same host path can reuse a stale
+directory-typed entry from the VM's own cache, surviving across separate
+`--rm` containers).
+
+**Fix**: Mount the whole config directory as `/config` in one bind mount,
+not each file individually. T010's `docker-compose.yml` entry for the
+`authelia` service should do the same — a directory volume mount for
+`docker/authelia/` as `/config`, not a `volumes:` entry per file.
 
 ## Decision: No `contracts/` directory
 
