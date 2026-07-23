@@ -23,7 +23,10 @@ package = false
 [tool.pytest.ini_options]
 minversion = "8.0"
 testpaths = ["tests"]
-addopts = "-ra --strict-markers --import-mode=importlib"
+markers = [
+    "system: needs a full docker-compose harness (opt-in, not run by default)",
+]
+addopts = "-ra --strict-markers --import-mode=importlib -m \"not system\""
 pythonpath = ["."]
 asyncio_mode = "auto"
 
