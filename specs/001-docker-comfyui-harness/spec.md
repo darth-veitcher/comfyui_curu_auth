@@ -32,16 +32,9 @@ into a real ComfyUI checkout each time.
 
 **Acceptance Scenarios**:
 
-1. **Given** Docker is available and the repo is checked out, **When** the
-   developer brings the harness up, **Then** a local ComfyUI instance
-   becomes reachable on a known port and reports healthy once it is up and
-   enforcing the gate (not merely "process started").
-2. **Given** the harness is healthy, **When** an unauthenticated request is
-   made to it, **Then** the request is rejected (401), proving the gate
-   from the current working tree is active — not a previously-published
-   version.
-3. **Given** the harness is healthy, **When** a request is made with the
-   fixed, known test credential, **Then** the request succeeds.
+1. **Given** Docker is available and the repo is checked out, **When** the developer brings the harness up, **Then** a local ComfyUI instance becomes reachable on a known port and reports healthy once it is up and enforcing the gate (not merely "process started").
+2. **Given** the harness is healthy, **When** an unauthenticated request is made to it, **Then** the request is rejected (401), proving the gate from the current working tree is active — not a previously-published version.
+3. **Given** the harness is healthy, **When** a request is made with the fixed, known test credential, **Then** the request succeeds.
 
 ---
 
@@ -65,18 +58,10 @@ isn't.
 
 **Acceptance Scenarios**:
 
-1. **Given** the harness is healthy, **When** the integration suite runs,
-   **Then** it verifies unauthenticated requests are rejected on
-   representative HTTP routes and on the websocket handshake specifically.
-2. **Given** the harness is healthy, **When** the integration suite
-   authenticates with the fixed test credential, **Then** those same routes
-   succeed.
-3. **Given** the harness is healthy, **When** the integration suite submits
-   repeated wrong credentials, **Then** it observes increasing backoff
-   consistent with the gate's documented rate-limiting behavior.
-4. **Given** the gate's middleware is not actually wired up (simulated
-   regression), **When** the integration suite runs, **Then** it fails
-   loudly rather than passing silently.
+1. **Given** the harness is healthy, **When** the integration suite runs, **Then** it verifies unauthenticated requests are rejected on representative HTTP routes and on the websocket handshake specifically.
+2. **Given** the harness is healthy, **When** the integration suite authenticates with the fixed test credential, **Then** those same routes succeed.
+3. **Given** the harness is healthy, **When** the integration suite submits repeated wrong credentials, **Then** it observes increasing backoff consistent with the gate's documented rate-limiting behavior.
+4. **Given** the gate's middleware is not actually wired up (simulated regression), **When** the integration suite runs, **Then** it fails loudly rather than passing silently.
 
 ---
 
@@ -98,10 +83,7 @@ is not still rate-limited and issues a fresh session on first login.
 
 **Acceptance Scenarios**:
 
-1. **Given** the harness was previously brought up, torn down, and is being
-   brought up again, **When** the developer checks its state, **Then** it
-   behaves identically to a first-ever run (no stale rate-limit counters,
-   no stale sessions).
+1. **Given** the harness was previously brought up, torn down, and is being brought up again, **When** the developer checks its state, **Then** it behaves identically to a first-ever run (no stale rate-limit counters, no stale sessions).
 
 ---
 
