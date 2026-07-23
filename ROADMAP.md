@@ -13,9 +13,10 @@ gantt
     excludes    weekends
 
     section Planned
+    Browser-driven E2E harness (Playwright + virtual authenticator) :browser-e2e, after local-test-harness, 7d
     CPU-only Docker integration harness for ComfyUI + this node :local-test-harness, 2026-07-23, 7d
-    Optional OIDC/OAuth login path :oidc-auth, 2026-07-23, 7d
-    Passwordless WebAuthn/passkey login :passkey-auth, 2026-07-23, 7d
+    Optional OIDC/OAuth login path :oidc-auth, after local-test-harness, 7d
+    Passwordless WebAuthn/passkey login :passkey-auth, after browser-e2e, 7d
 
 ```
 
@@ -23,7 +24,8 @@ gantt
 
 | Epic | Title | Status | Specs | Fidelity |
 |---|---|---|---|---|
-| [local-test-harness](project-management/Roadmap/epics/local-test-harness.md) | CPU-only Docker integration harness for ComfyUI + this node | Planning | — | S? A? T:- |
+| [browser-e2e](project-management/Roadmap/epics/browser-e2e.md) | Browser-driven E2E harness (Playwright + virtual authenticator) | Planning | — | S? A? T:- |
+| [local-test-harness](project-management/Roadmap/epics/local-test-harness.md) | CPU-only Docker integration harness for ComfyUI + this node | Planning | 0/1 shipped | S+ A? T:0% |
 | [oidc-auth](project-management/Roadmap/epics/oidc-auth.md) | Optional OIDC/OAuth login path | Planning | — | S? A? T:- |
 | [passkey-auth](project-management/Roadmap/epics/passkey-auth.md) | Passwordless WebAuthn/passkey login | Planning | — | S? A? T:- |
 
@@ -31,4 +33,6 @@ _Fidelity: `S+/S?` = has specs / none · `A+/A?` = has ADRs / none · `T:N%` = t
 
 ## Active Work
 
-_No active bullets._
+**local-test-harness**
+
+- `001-docker-comfyui-harness` — Register the `system` pytest marker and add `-m "not system"` to

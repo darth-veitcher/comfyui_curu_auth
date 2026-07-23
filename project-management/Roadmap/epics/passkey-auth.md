@@ -14,8 +14,13 @@ opt-in-auth-method plumbing the `oidc-auth` epic establishes.
 _Other epics that must reach Done before this one starts. Add a bullet per
 dependency: `- <slug> — <optional criterion>`. Leave empty if none._
 
-- local-test-harness — needed to verify the WebAuthn ceremony against a
-  real ComfyUI instance rather than by hand
+- browser-e2e — a WebAuthn ceremony can't be exercised through
+  `local-test-harness`'s HTTP/WS-only harness (adversarial engineering
+  review, 2026-07-23, corrected this from an earlier, infeasible
+  dependency on `local-test-harness` directly — that harness deliberately
+  has no browser tooling). This epic's *auth logic* itself can still be
+  built and unit-tested hermetically in parallel with `browser-e2e`; only
+  end-to-end verification is gated on it.
 
 ## Specs
 _SpecKit specs that contribute to this epic. Linked automatically when
@@ -34,7 +39,9 @@ not in any single spec.md. Create ADRs in `project-management/ADRs/`
 
 ## Success criteria
 - Operator can register a passkey and log in with it (WebAuthn ceremony)
-  as an alternative to the default credential
+  as an alternative to the default credential — verified end-to-end via
+  the `browser-e2e` epic's browser-driven harness, not the HTTP/WS-only
+  `local-test-harness`
 - Default zero-config credential path is unaffected when no passkey is
   registered
 - Passkey/relying-party setup is documented clearly enough for a

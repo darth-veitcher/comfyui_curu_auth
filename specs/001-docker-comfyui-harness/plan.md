@@ -40,9 +40,12 @@ or persistent volume
 suite) for an existing single-file ComfyUI custom node — not a service
 
 **Performance Goals**: Harness reaches healthy within its health check's
-startup budget; SC-001's "under 1 minute" repeat-boot applies once the
+startup budget; SC-001's 180-second repeat-boot budget applies once the
 image is already built (first build is a separate, multi-minute one-time
-cost per the Assumptions section)
+cost per the Assumptions section) — 180s matches the sibling harness's own
+validated cold-start time (revised from an initial 1-minute target after
+adversarial engineering review found ComfyUI's own CPU boot routinely
+exceeds it)
 
 **Constraints**: CPU-only — no GPU device reservation; no model checkpoint;
 no workflow execution (Epic + spec Non-Goals)
@@ -90,9 +93,11 @@ of its own.
 docker/
 └── comfyui/
     ├── Dockerfile         # CPU-only ComfyUI image, pinned tag, bind-mount target for this node
-    └── healthcheck.py     # Treats 401 as healthy (gate active), adapted from curu's own
+    └── healthcheck.py     # Requires 401 specifically (200 = unhealthy/ungated) —
+                            # inverted from curu's own tolerant version; see research.md
 
-docker-compose.yml         # Single service: comfyui, bind-mounts repo root into custom_nodes/
+docker-compose.yml         # Single service: comfyui, bind-mounts repo root to the absolute
+                            # in-container path /app/ComfyUI/custom_nodes/comfyui_curu_auth
 
 tests/
 └── system/

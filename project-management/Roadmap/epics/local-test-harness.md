@@ -60,8 +60,14 @@ exactly this: `docker-compose.yml` + `docker/comfyui/Dockerfile` build a
 CPU-only ComfyUI image (`--cpu`, CPU torch wheels, pinned ComfyUI tag) with
 comfyui_curu_auth installed via `git clone` from GitHub and a fixed
 `COMFYUI_CURU_AUTH_TOKEN` so tests don't scrape a random credential from
-logs. Its healthcheck already treats a `401` response as "alive and
-correctly gated," not a failure — reuse that reasoning directly. Adapt by
-swapping the GitHub clone for a bind-mount/COPY of this repo's own working
-tree, and drop curu's `generate_checkpoint.py` step (that only exists to
-prove workflow execution, out of scope here).
+logs. Adapt by swapping the GitHub clone for a bind-mount of this repo's
+own working tree, and drop curu's `generate_checkpoint.py` step (that only
+exists to prove workflow execution, out of scope here).
+
+**Correction (adversarial engineering review, 2026-07-23)**: curu's own
+healthcheck treats both `200` and `401` as healthy — safe for curu, where
+the node is baked into the image and always present, but wrong for this
+epic, whose entire premise is a bind mount that can fail. This harness's
+healthcheck must require `401` specifically (200 = unhealthy/ungated) — do
+**not** reuse curu's version verbatim. See
+`specs/001-docker-comfyui-harness/research.md` for the corrected decision.

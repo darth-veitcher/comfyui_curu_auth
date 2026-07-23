@@ -30,9 +30,11 @@ version of someone else's node. This spec is the opposite case — testing
 comfyui_curu_auth's own in-progress working tree (FR-002). A `COPY` at
 build time would require a full image rebuild (ComfyUI re-clone + torch
 reinstall, multi-minute) on every code change; a read-only bind mount of
-the repo root to `custom_nodes/comfyui_curu_auth` lets a plain container
-restart pick up local edits, which is what SC-001's "under 1 minute" repeat
-boot actually depends on.
+the repo root to the **absolute** in-container path
+`/app/ComfyUI/custom_nodes/comfyui_curu_auth` (where the Dockerfile clones
+ComfyUI — a relative path here would silently mount nowhere ComfyUI's
+loader looks) lets a plain container restart pick up local edits, which is
+what SC-001's repeat-boot budget actually depends on.
 
 **Alternatives considered**: `COPY . custom_nodes/comfyui_curu_auth` at
 build time — rejected: forces a full rebuild per code change, directly
@@ -49,12 +51,24 @@ source of "works in one, not the other" confusion later.
 reproducibility for currency the harness doesn't need (Assumptions:
 "pinned version acceptable, updated manually over time").
 
-## Decision: Reuse curu's `401`-tolerant healthcheck approach
+## Decision: Adapt curu's healthcheck reasoning, but tighten it — 401 required, not merely tolerated
 
-**Rationale**: `docker/comfyui/healthcheck.py` in curu already encodes the
-right reasoning: once comfyui_curu_auth is active, every route including a
-plain `GET /` requires a credential, so a `401` means "up and correctly
-gated," not "crashed." Same logic applies here unchanged.
+**Rationale**: curu's `docker/comfyui/healthcheck.py` treats **both** `200`
+and `401` as healthy (a `200` falls through its `try` with no exception
+raised). That's safe for curu, where the node is baked into the image at
+build time and is always present. It is **wrong here**: this harness's
+entire premise is a bind-mounted working tree that can fail to mount or
+fail to import, in which case ComfyUI comes up ungated and answers `200` —
+copied verbatim, curu's healthcheck would report that as *healthy*,
+directly violating FR-004 ("distinguishes 'the gate is actively enforcing'
+from … 'gate isn't wired up'"). Caught by adversarial engineering review
+(`/beacon.engineering`, 2026-07-23) before any code was written.
+
+This harness's `healthcheck.py` must invert the tolerance: exit non-zero
+(unhealthy) on `200`, exit 0 (healthy) only on `401`. An unmounted or
+crashed node then fails the health check instead of silently passing it —
+the bind-mount premise becomes self-verifying rather than a silent failure
+mode only caught later by US1's own test assertion.
 
 **Alternatives considered**: A bespoke `/ping`-style unauthenticated
 health route — rejected; would require patching ComfyUI itself or carving
@@ -104,13 +118,53 @@ regardless of directory layout.
 `ws_connect` for the `/ws` handshake check) covers every request FR-005
 needs without adding a new one (`requests`/`httpx`). `subprocess` wrapping
 `docker compose up -d` / `down` / `ps` mirrors curu's own
-`tests/system/conftest.py` `compose()` helper almost exactly.
+`tests/system/conftest.py` `compose()` helper's *shape*.
+
+**Important divergence from curu, not a verbatim port**: curu's own
+`conftest.py` polling helpers (`wait_until_reachable` / equivalent) are
+built on `httpx` (sync). That contradicts this spec's own "no new
+dependency" decision above — this project has no `httpx`. `conftest.py`'s
+`compose()` subprocess wrapper can follow curu's shape closely, but the
+HTTP-polling helpers must be written fresh, async, against
+`aiohttp.ClientSession` — not copied. Caught by adversarial engineering
+review (2026-07-23): the tasks describing this as "adapted from curu's
+helper" understated that this part is a rewrite, not a port.
 
 **Alternatives considered**: `testcontainers-python`'s generic container
 API — rejected; it's a real dependency addition for a project whose
 Constitution treats every dependency as attack-surface-relevant, when a
 thin `subprocess` wrapper over `docker compose` (already required by FR-001
 regardless) does the same job with nothing new to justify.
+
+## Decision: Pace the rate-limit backoff assertion across block expiries, not a tight failure loop
+
+**Rationale**: `gate.py`'s `RateLimiter` only calls `record_failure` when
+the client is **not currently blocked** — a client already inside a block
+window gets `429` immediately, without incrementing further. Hammering the
+wrong credential in a tight loop therefore observes a constant ~1s
+`Retry-After`, never growth — the opposite of what FR-005's "repeated wrong
+credentials trigger increasing backoff" requires the test to witness.
+Caught by adversarial engineering review (2026-07-23) before T011/T012 were
+implemented.
+
+The test must instead: fail once, read `Retry-After`, **sleep past** that
+window, fail again, confirm the next `Retry-After` is larger, and repeat
+for at least two growth steps (1s → 2s → 4s) — a real, budgeted sleep cost
+of roughly 7+ seconds for this one test, not a tight loop. Assertions on
+the growth sequence should use loose (`>=` / ratio) comparisons, not exact
+second values, since scheduling jitter under Docker is expected.
+
+Also worth recording here: through Docker's published port
+(`localhost:8188` → container), `request.remote` on the ComfyUI side
+resolves to Docker's bridge gateway address, which is stable across
+requests from the same test run — so `_client_key`-based backoff keys
+consistently in this harness. No `X-Forwarded-For` handling is needed for
+this feature.
+
+**Alternatives considered**: Asserting only that a `429` eventually
+appears, without checking growth — rejected; that's a materially weaker
+witness of FR-005 than what the spec's Acceptance Scenario actually
+claims ("increasing backoff").
 
 ## Decision: No `contracts/` directory
 

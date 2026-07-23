@@ -55,3 +55,12 @@ When this epic starts, extend `local-test-harness`'s docker-compose with an
 Authelia container (lightweight, self-hosted OIDC provider) to serve as the
 test IdP for automated OIDC-flow tests — flagged during epic planning
 (2026-07-23) at the user's suggestion, not yet built.
+
+**Before this epic enters BUILD** (flagged by adversarial engineering
+review, 2026-07-23): "landing on the same session-cookie mechanism the
+default credential path uses" (Success Criteria above) is an architectural
+decision — how a second auth method shares `gate.py`'s `SessionStore`/
+cookie — that has no ADR yet, and `project-management/Background/
+01-final-architecture-document.md` is still the unfilled template. Write
+that ADR (and fill in enough of the architecture doc to support it) before
+specs are cut here, not after.

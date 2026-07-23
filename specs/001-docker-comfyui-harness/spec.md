@@ -138,8 +138,11 @@ is not still rate-limited and issues a fresh session on first login.
 ### Measurable Outcomes
 
 - **SC-001**: From a clean checkout with the container image already built,
-  a developer reaches a healthy, gate-enforcing local ComfyUI instance in
-  under 1 minute.
+  a developer reaches a healthy, gate-enforcing local ComfyUI instance
+  within 180 seconds — the same cold-start budget the sibling harness this
+  is adapted from already validates in practice (revised from an initial
+  1-minute target after adversarial engineering review, 2026-07-23, found
+  ComfyUI's own CPU boot time routinely exceeds it).
 - **SC-002**: Every route the integration suite checks — including the
   websocket handshake — correctly rejects unauthenticated access on every
   run; zero tolerance for a route silently passing through ungated.

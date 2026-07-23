@@ -46,13 +46,17 @@ every story's tests drive the harness through these helpers.
 
 - [ ] T003 Implement a `compose(*args, timeout=None)` subprocess helper
       (wraps `docker compose <args>`, returns a `CompletedProcess`) in
-      `tests/system/conftest.py`, adapted from curu's own
-      `tests/system/conftest.py` helper of the same name
-- [ ] T004 Implement `wait_until_reachable(timeout)` /
+      `tests/system/conftest.py` — this one can follow the *shape* of
+      curu's own `conftest.py` helper of the same name closely, since
+      subprocess wrapping has no dependency conflict
+- [ ] T004 Implement `wait_until_reachable(timeout=180)` /
       `wait_until_unreachable(timeout)` polling helpers in
-      `tests/system/conftest.py` (poll `GET http://localhost:8188/` via
-      `aiohttp.ClientSession`; "reachable" means *any* HTTP response,
-      including 401 — the gate being active is not a failure to reach)
+      `tests/system/conftest.py`, written **fresh against
+      `aiohttp.ClientSession`** — NOT ported from curu's own equivalent,
+      which is built on `httpx` (a dependency this project deliberately
+      doesn't have; research.md). "Reachable" means *any* HTTP response,
+      including 401 — the gate being active is not a failure to reach.
+      Default timeout of 180s matches SC-001's revised, realistic budget.
 
 **Checkpoint**: Foundation ready — US1 can now be implemented.
 
@@ -69,25 +73,32 @@ unauthenticated request 401s and the fixed test credential succeeds.
 
 - [ ] T005-T [US1] Write a FAILING test `test_harness_boots_and_gate_enforces`
       in `tests/system/test_docker_harness.py`: `compose("up", "-d")`
-      succeeds, `wait_until_reachable` returns under its timeout, an
-      unauthenticated `GET /` returns 401, and the same request with the
-      fixed test credential (`COMFYUI_CURU_AUTH_TOKEN`) returns 200.
-      Implements the feature file's "Boot a real, gated ComfyUI instance",
-      "Unauthenticated HTTP requests are rejected", and "The fixed test
-      credential succeeds" scenarios. **Fails now** — no
+      succeeds, `wait_until_reachable` returns under a 180s timeout (SC-001 —
+      see research.md's "Pace the rate-limit..." sibling note on realistic
+      ComfyUI CPU boot time), an unauthenticated `GET /` returns 401, and the
+      same request with the fixed test credential (`COMFYUI_CURU_AUTH_TOKEN`)
+      returns 200. Implements the feature file's "Boot a real, gated ComfyUI
+      instance", "Unauthenticated HTTP requests are rejected", and "The
+      fixed test credential succeeds" scenarios. **Fails now** — no
       `docker-compose.yml` or Dockerfile exist yet, so `compose up` errors.
 - [ ] T006 [P] [US1] Implement `docker/comfyui/Dockerfile`: CPU-only ComfyUI
       at a pinned tag (same tag as curu's own harness — research.md), CPU
       torch wheels, no checkpoint generation step, `EXPOSE 8188`, `CMD`
-      running the persistent server (`--cpu --listen 0.0.0.0 --port 8188`)
-- [ ] T007 [P] [US1] Implement `docker/comfyui/healthcheck.py`: treats HTTP
-      401 alongside 200 as healthy (adapted directly from curu's own
-      `docker/comfyui/healthcheck.py` — same reasoning, gate active means
-      401 on every route including `/`)
+      running the persistent server (`--cpu --listen 0.0.0.0 --port 8188`).
+      Note the ComfyUI dependency footgun curu's own Dockerfile already
+      documents at this tag (a `pip install requests` needed beyond
+      `requirements.txt`) — expect similar iteration here.
+- [ ] T007 [P] [US1] Implement `docker/comfyui/healthcheck.py`: **NOT** a
+      verbatim copy of curu's own (which treats 200 as healthy too — wrong
+      here, see research.md's healthcheck decision). This version MUST exit
+      non-zero (unhealthy) on 200 and exit 0 (healthy) only on 401, so a
+      failed/unmounted bind mount (FR-002) reports unhealthy instead of
+      silently passing as an ungated instance (FR-004).
 - [ ] T008-I [US1] Implement root `docker-compose.yml`: single `comfyui`
       service building T006's Dockerfile, port `8188:8188`, no GPU device
-      reservation, bind-mounts this repo's root read-only to
-      `custom_nodes/comfyui_curu_auth` inside the container (FR-002), sets
+      reservation, bind-mounts this repo's root read-only to the **absolute**
+      in-container path `/app/ComfyUI/custom_nodes/comfyui_curu_auth` (FR-002
+      — a relative path here mounts nowhere ComfyUI's loader looks), sets
       `COMFYUI_CURU_AUTH_TOKEN` to a fixed test value (FR-003), wires
       T007's healthcheck. Depends on T006, T007. Makes T005-T pass.
 
@@ -116,13 +127,20 @@ confirm it exits non-zero if the gate is temporarily broken.
       T009-T passes
 - [ ] T011-T [US2] Write a FAILING test
       `test_repeated_wrong_credentials_trigger_backoff` in
-      `tests/system/test_docker_harness.py`: submitting the wrong
-      credential repeatedly against the harness MUST return 429 with a
-      growing `Retry-After`. Implements the feature file's "Repeated wrong
-      credentials trigger backoff" scenario. **Fails now** — no
-      repeated-failure helper exists yet.
-- [ ] T012-I [US2] Implement the repeated-failed-login helper and backoff
-      assertions so T011-T passes
+      `tests/system/test_docker_harness.py`. **Must NOT hammer the wrong
+      credential in a tight loop** — `gate.py`'s `RateLimiter` only calls
+      `record_failure` when the client isn't already blocked, so a tight
+      loop observes a constant ~1s `Retry-After`, never growth (caught by
+      adversarial engineering review, 2026-07-23; see research.md's pacing
+      decision). Instead: fail once, read `Retry-After`, sleep past that
+      window, fail again, and assert the next `Retry-After` is larger —
+      repeat for at least two growth steps (1s → 2s → 4s). Budget ~7+
+      real seconds of sleep for this test; use loose (`>=`/ratio)
+      comparisons, not exact second values. Implements the feature file's
+      "Repeated wrong credentials trigger backoff" scenario. **Fails now**
+      — no repeated-failure helper exists yet.
+- [ ] T012-I [US2] Implement the paced, block-expiry-aware repeated-failed-
+      login helper and backoff-growth assertions so T011-T passes
 - [ ] T013 [US2] One-time manual regression sanity check (not a permanent
       automated task, mirroring curu's own precedent for a
       not-worth-automating check): temporarily comment out the gate
@@ -218,10 +236,23 @@ Task: "Implement docker/comfyui/healthcheck.py"
 
 ### Suggested tracer-bullet split (2-4h each, per BEACON)
 
-1. **Bullet 1 (MVP)**: Phase 1 + Phase 2 + Phase 3 (US1) — a developer can
-   bring up a real, gated ComfyUI instance and verify it by hand. Demoable.
-2. **Bullet 2**: Phase 4 (US2) — the automated live-gate suite.
-3. **Bullet 3**: Phase 5 (US3) + Phase 6 (Polish) — teardown/restart
+Revised after adversarial engineering review (2026-07-23): US1 gets its own
+bullet, separate from Setup/Foundational, because its budget is dominated
+by Docker image build iteration (CPU torch wheels + ComfyUI clone,
+multi-minute per rebuild, plus a known dependency footgun at this ComfyUI
+tag — research.md) rather than by code volume. Bundling it with the quick,
+deterministic Setup/Foundational work risked blowing a single 4h ceiling.
+
+1. **Bullet 1**: Phase 1 (Setup) + Phase 2 (Foundational) — quick,
+   deterministic, no Docker builds yet.
+2. **Bullet 2 (MVP)**: Phase 3 (US1) — a developer can bring up a real,
+   gated ComfyUI instance and verify it by hand. Demoable. Budget extra
+   time/sessions for Docker build iteration specifically, not just the
+   code in T005–T008.
+3. **Bullet 3**: Phase 4 (US2) — the automated live-gate suite. Includes
+   the rate-limit test's own ~7+ second real sleep budget (T011/T012) —
+   not just implementation time.
+4. **Bullet 4**: Phase 5 (US3) + Phase 6 (Polish) — teardown/restart
    guarantees and documentation/cleanup.
 
 ### MVP First
