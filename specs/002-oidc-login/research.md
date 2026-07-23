@@ -106,10 +106,19 @@ during adversarial engineering review (2026-07-23) that this needed
 confirming, not assuming, given the live-verification criterion would
 otherwise silently depend on the not-yet-built `browser-e2e` epic.
 
-**Alternatives considered**: A real browser via Playwright — rejected;
-would pull `browser-e2e`'s dependency forward into this epic despite
-ADR-002/ADR-003 explicitly scoping it out, for no benefit over the
-scriptable API path Authelia already exposes.
+**Alternatives considered**: A real browser via Playwright — rejected as
+the *default* path; would pull `browser-e2e`'s dependency forward into
+this epic despite ADR-002/ADR-003 explicitly scoping it out, for no
+benefit over the scriptable API path Authelia already exposes.
+
+**Revised (2026-07-23, user direction)**: if the headless spike (tasks.md
+T009) fails, fall back to Playwright directly in this spec's own live
+test rather than treating spike failure as a hard stop. This is narrower
+than adopting `browser-e2e`'s own scope: Playwright here would only drive
+Authelia's login portal (a React SPA, but standard DOM interaction — no
+WebAuthn virtual-authenticator API needed), which doesn't require or
+justify pulling `browser-e2e`'s own WebAuthn-ceremony tooling forward.
+`browser-e2e`'s reason to exist is unchanged either way.
 
 ## Decision: Reconcile the issuer-URL duality — container-internal hostname for the gate, published host port for the test's simulated "browser"
 

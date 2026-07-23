@@ -97,10 +97,16 @@ changes; US2 verifies nothing changes when they aren't used.
       (and later T028's) host-side test client, vs
       `http://localhost:8188/curu-auth/oidc/callback` as the registered
       `redirect_uri`. **If this spike fails** (headless login proves
-      infeasible against Authelia as configured), stop and reconsider
-      whether `oidc-auth`'s live-verification criterion actually needs the
-      not-yet-built `browser-e2e` epic — do not proceed into T010 on an
-      unconfirmed assumption. Findings become T010's acceptance notes.
+      infeasible against Authelia as configured), fall back to driving
+      the live test with Playwright directly in this spec's own
+      `tests/system/test_oidc_harness.py` — added as a dev dependency
+      scoped to that one test file — rather than stopping to reconsider
+      `browser-e2e` (user direction, 2026-07-23: "use Playwright if
+      needed"). This does not change `browser-e2e`'s own scope or
+      justification — WebAuthn ceremonies still need a real browser's
+      credential-management APIs, which is a different requirement than
+      "Authelia's login portal happens to be a React SPA." Findings
+      either way become T010's acceptance notes.
 - [ ] T010 Extend `docker-compose.yml` with an `authelia` service (Lite
       bundle — file-based user, SQLite storage, no Postgres/Redis;
       ADR-002) and add `docker/authelia/` with its static configuration: a
