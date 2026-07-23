@@ -144,12 +144,16 @@ confirm it exits non-zero if the gate is temporarily broken.
       — no repeated-failure helper exists yet.
 - [x] T012-I [US2] Implement the paced, block-expiry-aware repeated-failed-
       login helper and backoff-growth assertions so T011-T passes
-- [ ] T013 [US2] One-time manual regression sanity check (not a permanent
+- [x] T013 [US2] One-time manual regression sanity check (not a permanent
       automated task, mirroring curu's own precedent for a
       not-worth-automating check): temporarily comment out the gate
       middleware registration in `__init__.py`, confirm T005-T/T009-T/T011-T
       all fail loudly, then revert. Record the result in this task's
       completion note — proves the suite isn't tautologically green.
+      **Done (2026-07-23)**: all three tests failed as expected with the
+      middleware disabled (401→200 assertion failures, WS handshake
+      succeeded instead of raising). `__init__.py` reverted; `git diff`
+      confirmed clean; all 3 system tests + 44 hermetic tests pass again.
 
 **Checkpoint**: User Stories 1 AND 2 both work — the auth gate is verified
 automatically against a real ComfyUI process.
