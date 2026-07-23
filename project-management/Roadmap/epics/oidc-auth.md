@@ -33,6 +33,7 @@ not in any single spec.md. Create ADRs in `project-management/ADRs/`
 
 - [ADR-001](../../ADRs/ADR-001-docker-comfyui-test-harness.md) — the harness this epic's Authelia extension builds on top of
 - [ADR-002](../../ADRs/ADR-002-oidc-session-sharing-and-test-idp.md) — OIDC shares the existing SessionStore/cookie mechanism; Authelia (Lite bundle) is the test IdP
+- [ADR-003](../../ADRs/ADR-003-gate-public-paths-generalization.md) — how OIDC's callback route gets through the gate pre-session (shared mechanism, also used by passkey-auth later)
 
 ## Success criteria
 - Operator can configure an OIDC provider (client id/secret, issuer URL)

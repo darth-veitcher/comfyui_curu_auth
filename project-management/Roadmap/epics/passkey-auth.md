@@ -35,7 +35,7 @@ BEACON DESIGN-phase activity; the architectural choices that span specs
 not in any single spec.md. Create ADRs in `project-management/ADRs/`
 (MADR format) and link them below._
 
-<!-- - project-management/ADRs/ADR-NNN-decision-title.md -->
+- [ADR-003](../../ADRs/ADR-003-gate-public-paths-generalization.md) — the shared mechanism this epic's own WebAuthn ceremony routes will register through
 
 ## Success criteria
 - Operator can register a passkey and log in with it (WebAuthn ceremony)
