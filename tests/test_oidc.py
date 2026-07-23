@@ -81,3 +81,74 @@ class TestPublicPathsGeneralization:
 
             gated_response = await client.get("/object_info")
             assert gated_response.status == 401
+
+
+# --------------------------------------------------------------------------
+# resolve_oidc_config -- T007/T008.
+# --------------------------------------------------------------------------
+
+
+class TestResolveOidcConfig:
+    """All four settings MUST be present together (FR-001); any subset
+    missing MUST resolve to `None` -- "OIDC is unconfigured" -- never a
+    partially-filled config object (FR-009)."""
+
+    def test_all_four_present_resolves_to_a_populated_config(self) -> None:
+        from oidc import resolve_oidc_config
+
+        config = resolve_oidc_config(
+            issuer_url="https://idp.example.com",
+            client_id="comfyui-curu-auth",
+            client_secret="s3cr3t",
+            redirect_uri="https://host/curu-auth/oidc/callback",
+        )
+        assert config is not None
+        assert config.issuer_url == "https://idp.example.com"
+        assert config.client_id == "comfyui-curu-auth"
+        assert config.client_secret == "s3cr3t"
+        assert config.redirect_uri == "https://host/curu-auth/oidc/callback"
+
+    def test_all_four_absent_resolves_to_none(self) -> None:
+        from oidc import resolve_oidc_config
+
+        assert (
+            resolve_oidc_config(
+                issuer_url=None,
+                client_id=None,
+                client_secret=None,
+                redirect_uri=None,
+            )
+            is None
+        )
+
+    def test_missing_client_secret_resolves_to_none_not_a_partial_config(
+        self,
+    ) -> None:
+        # FR-009 / Edge Case: a client ID but no client secret must fail
+        # safe to unconfigured, not start in a half-configured state.
+        from oidc import resolve_oidc_config
+
+        assert (
+            resolve_oidc_config(
+                issuer_url="https://idp.example.com",
+                client_id="comfyui-curu-auth",
+                client_secret=None,
+                redirect_uri="https://host/curu-auth/oidc/callback",
+            )
+            is None
+        )
+
+    def test_blank_string_values_are_treated_like_absent(self) -> None:
+        # os.environ.get returns "" for a declared-but-empty var, not
+        # None -- mirrors resolve_credential's own established handling.
+        from oidc import resolve_oidc_config
+
+        assert (
+            resolve_oidc_config(
+                issuer_url="https://idp.example.com",
+                client_id="comfyui-curu-auth",
+                client_secret="",
+                redirect_uri="https://host/curu-auth/oidc/callback",
+            )
+            is None
+        )
