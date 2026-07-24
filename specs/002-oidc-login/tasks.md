@@ -170,7 +170,7 @@ to the credential-login session.
 (T010), authenticate through it (per T009's proven headless sequence),
 confirm the same `curu_auth` cookie session results.
 
-- [ ] T011-T [US1] Write a FAILING hermetic test in `tests/test_oidc.py`
+- [x] T011-T [US1] Write a FAILING hermetic test in `tests/test_oidc.py`
       for the discovery-document fetch: given a resolved OIDC config,
       fetches `{issuer_url}/.well-known/openid-configuration` via
       `aiohttp` with a bounded `ClientTimeout`, and treats any fetch
@@ -180,9 +180,9 @@ confirm the same `curu_auth` cookie session results.
       before; it's required for the "identity provider is unreachable or
       times out" Edge Case. **Fails now** — the fetch function doesn't
       exist yet.
-- [ ] T012-I [US1] Implement the discovery-document fetch in `oidc.py` so
+- [x] T012-I [US1] Implement the discovery-document fetch in `oidc.py` so
       T011-T passes
-- [ ] T013-T [US1] Write a FAILING hermetic test in `tests/test_oidc.py`
+- [x] T013-T [US1] Write a FAILING hermetic test in `tests/test_oidc.py`
       for the authorization-URL builder: given a resolved OIDC config,
       produces a redirect URL to the provider's authorization endpoint
       carrying `state`, `nonce`, and a PKCE `code_challenge`, and records
@@ -194,16 +194,16 @@ confirm the same `curu_auth` cookie session results.
       live token exchange. References the feature file's "Initiate login
       redirects to the identity provider" scenario. **Fails now** — the
       builder doesn't exist yet.
-- [ ] T014-I [US1] Implement the authorization-URL builder and In-Flight
+- [x] T014-I [US1] Implement the authorization-URL builder and In-Flight
       Auth Request store in `oidc.py` so T013-T passes
-- [ ] T015-T [US1] Write a FAILING hermetic test in `tests/test_oidc.py`
+- [x] T015-T [US1] Write a FAILING hermetic test in `tests/test_oidc.py`
       for ID-token verification (via `joserfc`, against a mocked
       provider's JWKS and a hand-signed test token): a token with valid
       signature, matching `iss`/`aud`/`nonce`, and unexpired `exp` is
       accepted; wrong signature, wrong audience, wrong/missing nonce, and
       expired tokens are each rejected. **Fails now** — no verification
       function exists yet.
-- [ ] T016-I [US1] Implement ID-token verification in `oidc.py` using
+- [x] T016-I [US1] Implement ID-token verification in `oidc.py` using
       `joserfc`, fetching JWKS fresh on every call (no cache —
       research.md), so T015-T passes
 - [ ] T017-T [US1] Write a FAILING hermetic test in `tests/test_oidc.py`
