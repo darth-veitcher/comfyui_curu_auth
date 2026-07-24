@@ -16,6 +16,20 @@ hermetic ``pytest`` suite, with no real ComfyUI process needed -- mirrors
 from __future__ import annotations
 
 from dataclasses import dataclass
+from typing import Any
+
+import aiohttp
+
+
+class OIDCDiscoveryError(Exception):
+    """Raised for any failure fetching or parsing the identity provider's
+    discovery document -- timeout, connection error, or a malformed body
+    all collapse to this one exception type, so callers only need to
+    catch one thing regardless of the underlying cause. No cached
+    fallback on failure (research.md): a login attempt that hits this
+    simply fails, rather than silently serving a stale or
+    partially-fetched endpoint set.
+    """
 
 
 @dataclass(frozen=True)
@@ -59,4 +73,37 @@ def resolve_oidc_config(
     return None
 
 
-__all__ = ["OIDCConfig", "resolve_oidc_config"]
+async def fetch_discovery_document(
+    issuer_url: str, *, timeout: float = 10.0
+) -> dict[str, Any]:
+    """Fetch and parse ``{issuer_url}/.well-known/openid-configuration``.
+
+    Fetched fresh on every call -- no caching (research.md's "no JWKS
+    caching" reasoning applies identically here: login is infrequent
+    enough that the extra round-trip is negligible, and an unstated cache
+    would otherwise mask the provider changing its own endpoints). Any
+    failure -- timeout, connection error, non-2xx status, or a body that
+    isn't valid JSON -- raises :class:`OIDCDiscoveryError`; there is no
+    partial-success or fallback path.
+    """
+
+    url = f"{issuer_url}/.well-known/openid-configuration"
+    try:
+        async with (
+            aiohttp.ClientSession() as session,
+            session.get(url, timeout=aiohttp.ClientTimeout(total=timeout)) as response,
+        ):
+            response.raise_for_status()
+            return await response.json(content_type=None)
+    except (TimeoutError, aiohttp.ClientError, ValueError) as exc:
+        raise OIDCDiscoveryError(
+            f"failed to fetch discovery document from {url}: {exc}"
+        ) from exc
+
+
+__all__ = [
+    "OIDCConfig",
+    "OIDCDiscoveryError",
+    "fetch_discovery_document",
+    "resolve_oidc_config",
+]
