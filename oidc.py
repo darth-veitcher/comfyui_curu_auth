@@ -300,12 +300,23 @@ async def verify_id_token(
 
 
 async def _exchange_code_for_token(
-    config: OIDCConfig, discovery: dict[str, Any], code: str, *, timeout: float = 10.0
+    config: OIDCConfig,
+    discovery: dict[str, Any],
+    code: str,
+    *,
+    code_verifier: str,
+    timeout: float = 10.0,
 ) -> dict[str, Any]:
     """POST the authorization code to the provider's token endpoint.
     Raises :class:`OIDCTokenVerificationError` on any failure -- a failed
     exchange means the callback as a whole cannot be trusted, the same
     outcome as a failed signature/claims check.
+
+    ``code_verifier`` MUST be the same :class:`InFlightAuthRequest`'s
+    `pkce_verifier` that `build_authorization_url` derived the
+    authorization request's `code_challenge` from (RFC 7636) -- a real
+    provider (Authelia included) rejects the exchange with a 400 if it's
+    missing or doesn't match, confirmed live.
     """
 
     data = {
@@ -314,6 +325,7 @@ async def _exchange_code_for_token(
         "redirect_uri": config.redirect_uri,
         "client_id": config.client_id,
         "client_secret": config.client_secret,
+        "code_verifier": code_verifier,
     }
     try:
         async with (
@@ -399,7 +411,9 @@ def build_oidc_routes(
         code = request.query.get("code", "")
         try:
             discovery = await fetch_discovery_document(config.issuer_url)
-            token_response = await _exchange_code_for_token(config, discovery, code)
+            token_response = await _exchange_code_for_token(
+                config, discovery, code, code_verifier=in_flight.pkce_verifier
+            )
             id_token = token_response["id_token"]
             await verify_id_token(
                 id_token,
