@@ -8,6 +8,9 @@ own hermetic conventions.
 
 from __future__ import annotations
 
+import asyncio
+
+import pytest
 from aiohttp import web
 from aiohttp.test_utils import TestClient, TestServer
 
@@ -152,3 +155,84 @@ class TestResolveOidcConfig:
             )
             is None
         )
+
+
+# --------------------------------------------------------------------------
+# Discovery-document fetch -- T011/T012.
+# --------------------------------------------------------------------------
+
+_DISCOVERY_DOCUMENT = {
+    "issuer": "https://idp.example.com",
+    "authorization_endpoint": "https://idp.example.com/api/oidc/authorization",
+    "token_endpoint": "https://idp.example.com/api/oidc/token",
+    "jwks_uri": "https://idp.example.com/jwks.json",
+}
+
+
+class TestFetchDiscoveryDocument:
+    """`fetch_discovery_document` is the one HTTP call this feature makes
+    with no dependency on a resolved session/flow state -- every failure
+    mode (timeout, connection error, malformed body) MUST raise the same
+    `OIDCDiscoveryError`, never fall back to a cache or partial result
+    (research.md's "fetch fresh, fail closed" decision; Edge Case:
+    "identity provider is unreachable or times out")."""
+
+    async def test_successful_fetch_returns_the_parsed_document(self) -> None:
+        from oidc import fetch_discovery_document
+
+        async def _discovery_handler(request: web.Request) -> web.Response:
+            return web.json_response(_DISCOVERY_DOCUMENT)
+
+        app = web.Application()
+        app.router.add_get(
+            "/.well-known/openid-configuration", _discovery_handler
+        )
+
+        async with TestClient(TestServer(app)) as client:
+            base_url = str(client.make_url(""))
+            document = await fetch_discovery_document(
+                base_url.rstrip("/"), timeout=5.0
+            )
+
+        assert document == _DISCOVERY_DOCUMENT
+
+    async def test_timeout_raises_oidc_discovery_error(self) -> None:
+        from oidc import OIDCDiscoveryError, fetch_discovery_document
+
+        async def _slow_handler(request: web.Request) -> web.Response:
+            await asyncio.sleep(2.0)
+            return web.json_response(_DISCOVERY_DOCUMENT)
+
+        app = web.Application()
+        app.router.add_get("/.well-known/openid-configuration", _slow_handler)
+
+        async with TestClient(TestServer(app)) as client:
+            base_url = str(client.make_url(""))
+            with pytest.raises(OIDCDiscoveryError):
+                await fetch_discovery_document(base_url.rstrip("/"), timeout=0.1)
+
+    async def test_connection_error_raises_oidc_discovery_error(self) -> None:
+        from oidc import OIDCDiscoveryError, fetch_discovery_document
+
+        # Nothing listens on this port -- a real connection failure, not a
+        # mock, so the underlying aiohttp.ClientConnectorError is genuine.
+        with pytest.raises(OIDCDiscoveryError):
+            await fetch_discovery_document(
+                "http://127.0.0.1:1", timeout=2.0
+            )
+
+    async def test_malformed_body_raises_oidc_discovery_error(self) -> None:
+        from oidc import OIDCDiscoveryError, fetch_discovery_document
+
+        async def _not_json_handler(request: web.Request) -> web.Response:
+            return web.Response(text="not json", content_type="text/plain")
+
+        app = web.Application()
+        app.router.add_get(
+            "/.well-known/openid-configuration", _not_json_handler
+        )
+
+        async with TestClient(TestServer(app)) as client:
+            base_url = str(client.make_url(""))
+            with pytest.raises(OIDCDiscoveryError):
+                await fetch_discovery_document(base_url.rstrip("/"), timeout=5.0)
