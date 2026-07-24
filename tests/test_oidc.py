@@ -251,8 +251,9 @@ class TestBuildAuthorizationUrl:
     after adversarial engineering review, 2026-07-23)."""
 
     def test_url_targets_the_discovery_authorization_endpoint(self) -> None:
-        from oidc import AuthorizationRequestStore, OIDCConfig, build_authorization_url
         from urllib.parse import urlparse
+
+        from oidc import AuthorizationRequestStore, OIDCConfig, build_authorization_url
 
         config = OIDCConfig(**_CONFIG_KWARGS)
         store = AuthorizationRequestStore()
@@ -270,8 +271,9 @@ class TestBuildAuthorizationUrl:
     def test_query_carries_client_id_redirect_uri_response_type_and_scope(
         self,
     ) -> None:
-        from oidc import AuthorizationRequestStore, OIDCConfig, build_authorization_url
         from urllib.parse import parse_qs, urlparse
+
+        from oidc import AuthorizationRequestStore, OIDCConfig, build_authorization_url
 
         config = OIDCConfig(**_CONFIG_KWARGS)
         store = AuthorizationRequestStore()

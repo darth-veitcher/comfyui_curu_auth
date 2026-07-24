@@ -15,8 +15,13 @@ hermetic ``pytest`` suite, with no real ComfyUI process needed -- mirrors
 
 from __future__ import annotations
 
+import base64
+import hashlib
+import secrets
+import time
 from dataclasses import dataclass
 from typing import Any
+from urllib.parse import urlencode
 
 import aiohttp
 
@@ -101,9 +106,108 @@ async def fetch_discovery_document(
         ) from exc
 
 
+@dataclass(frozen=True)
+class InFlightAuthRequest:
+    """Transient, in-memory-only correlation between an authorization
+    request and its callback (data-model.md) -- `state` (CSRF), `nonce`
+    (replay-resistant, checked against the returned ID token), and a PKCE
+    `pkce_verifier`. Never durably stored; cleared entirely on restart,
+    exactly like :class:`gate.SessionStore` and :class:`gate.RateLimiter`
+    (FR-008).
+    """
+
+    state: str
+    nonce: str
+    pkce_verifier: str
+    created_at: float
+
+
+class AuthorizationRequestStore:
+    """In-memory store of :class:`InFlightAuthRequest` entries, keyed by
+    `state`.
+
+    Single-use by design: :meth:`pop` removes the entry it returns, so a
+    verbatim replay of an already-completed state/code pair finds nothing
+    and is rejected (FR-011) rather than re-validated and accepted again.
+
+    Size-capped (`max_size`, FR-010): the route that calls :meth:`create`
+    is necessarily unauthenticated (it must be reachable pre-session, the
+    same as the login form already is -- ADR-003's public-paths
+    mechanism), so nothing else bounds how many entries an unauthenticated
+    caller could otherwise make this hold. Oldest entries are evicted
+    first once the cap is exceeded -- independent of, and in addition to,
+    whatever rate-limiting is applied to the route itself (research.md).
+    """
+
+    def __init__(self, *, max_size: int = 1000) -> None:
+        self._max_size = max_size
+        self._entries: dict[str, InFlightAuthRequest] = {}
+
+    def create(self) -> InFlightAuthRequest:
+        entry = InFlightAuthRequest(
+            state=secrets.token_urlsafe(32),
+            nonce=secrets.token_urlsafe(32),
+            pkce_verifier=secrets.token_urlsafe(64),
+            created_at=time.monotonic(),
+        )
+        self._entries[entry.state] = entry
+        while len(self._entries) > self._max_size:
+            oldest_state = next(iter(self._entries))
+            del self._entries[oldest_state]
+        return entry
+
+    def pop(self, state: str) -> InFlightAuthRequest | None:
+        return self._entries.pop(state, None)
+
+    def peek(self, state: str) -> InFlightAuthRequest | None:
+        """Look up an entry without consuming it -- for tests/inspection
+        only; the actual callback handler MUST use :meth:`pop`."""
+
+        return self._entries.get(state)
+
+    def __len__(self) -> int:
+        return len(self._entries)
+
+
+def _pkce_challenge(verifier: str) -> str:
+    """RFC 7636 S256: `base64url(sha256(verifier))`, no padding."""
+
+    digest = hashlib.sha256(verifier.encode("ascii")).digest()
+    return base64.urlsafe_b64encode(digest).rstrip(b"=").decode("ascii")
+
+
+def build_authorization_url(
+    config: OIDCConfig,
+    discovery: dict[str, Any],
+    store: AuthorizationRequestStore,
+    *,
+    scope: str = "openid profile email",
+) -> str:
+    """Build the redirect URL to the identity provider's authorization
+    endpoint, recording a matching :class:`InFlightAuthRequest` in
+    ``store`` keyed by the `state` it generates.
+    """
+
+    in_flight = store.create()
+    query = {
+        "client_id": config.client_id,
+        "redirect_uri": config.redirect_uri,
+        "response_type": "code",
+        "scope": scope,
+        "state": in_flight.state,
+        "nonce": in_flight.nonce,
+        "code_challenge": _pkce_challenge(in_flight.pkce_verifier),
+        "code_challenge_method": "S256",
+    }
+    return f"{discovery['authorization_endpoint']}?{urlencode(query)}"
+
+
 __all__ = [
+    "AuthorizationRequestStore",
+    "InFlightAuthRequest",
     "OIDCConfig",
     "OIDCDiscoveryError",
+    "build_authorization_url",
     "fetch_discovery_document",
     "resolve_oidc_config",
 ]
