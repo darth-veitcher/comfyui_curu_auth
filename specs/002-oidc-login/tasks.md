@@ -266,7 +266,7 @@ confirm the same `curu_auth` cookie session results.
       **Fails now**.
 - [x] T027-I [US1] Wire the shared `RateLimiter` onto the start route and
       add the In-Flight store's size cap so T026-T passes
-- [ ] T028 [US1] Write a live `system`-marked test in
+- [x] T028 [US1] Write a live `system`-marked test in
       `tests/system/test_oidc_harness.py`: drive the full authorization-
       code flow against the real Authelia instance (T010) end-to-end,
       using T009's spike-proven headless sequence

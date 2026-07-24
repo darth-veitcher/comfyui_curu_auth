@@ -349,6 +349,30 @@ not each file individually. T010's `docker-compose.yml` entry for the
 `authelia` service should do the same — a directory volume mount for
 `docker/authelia/` as `/config`, not a `volumes:` entry per file.
 
+## Discovered during T028: the token exchange never sent the PKCE `code_verifier`
+
+**What happened**: `build_authorization_url` derived a `code_challenge`
+from each `InFlightAuthRequest.pkce_verifier` (RFC 7636) and sent it on
+the authorization request, but `_exchange_code_for_token` never sent the
+matching `code_verifier` back on the token exchange. Every hermetic test
+against the mocked provider passed regardless, because the mock never
+checked for it — the gap was invisible until T028 ran the full flow
+against a real Authelia instance, which correctly rejects a code
+exchange missing `code_verifier` with `400 Bad Request`.
+
+**Fix**: `_exchange_code_for_token` gained a required `code_verifier`
+keyword parameter, added to the POST body; the callback handler passes
+`in_flight.pkce_verifier` through. `tests/test_oidc.py`'s
+`_mock_provider_app` token handler was tightened to require and check
+`code_verifier` (opt-in via `holder["pkce_verifier"]`) so this class of
+regression is now caught hermetically too, not only by the live T028
+test — confirmed red against the un-fixed production code first.
+
+**Lesson for future OIDC/PKCE work**: a mocked provider that never
+enforces PKCE gives false confidence; the live test against the real
+IdP is what actually exercises the security-relevant contract, not just
+the shape of the request.
+
 ## Decision: No `contracts/` directory
 
 **Rationale**: Consistent with `specs/001-docker-comfyui-harness/`'s own
