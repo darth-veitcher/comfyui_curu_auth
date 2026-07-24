@@ -24,6 +24,9 @@ from typing import Any
 from urllib.parse import urlencode
 
 import aiohttp
+from joserfc import errors as jose_errors
+from joserfc import jwt
+from joserfc.jwk import KeySet
 
 
 class OIDCDiscoveryError(Exception):
@@ -202,12 +205,73 @@ def build_authorization_url(
     return f"{discovery['authorization_endpoint']}?{urlencode(query)}"
 
 
+class OIDCTokenVerificationError(Exception):
+    """Raised for any ID-token verification failure -- a JWKS fetch
+    failure, bad signature, wrong issuer/audience, wrong or missing
+    nonce, or an expired token all collapse to this one exception type,
+    mirroring :class:`OIDCDiscoveryError`'s shape (FR-007). A forged or
+    replayed callback MUST NOT succeed -- there is no partial-trust
+    outcome here, only "verified" or this exception.
+    """
+
+
+async def _fetch_jwks(jwks_uri: str, *, timeout: float) -> KeySet:
+    try:
+        async with (
+            aiohttp.ClientSession() as session,
+            session.get(
+                jwks_uri, timeout=aiohttp.ClientTimeout(total=timeout)
+            ) as response,
+        ):
+            response.raise_for_status()
+            jwks_data = await response.json(content_type=None)
+    except (TimeoutError, aiohttp.ClientError, ValueError) as exc:
+        raise OIDCTokenVerificationError(
+            f"failed to fetch JWKS from {jwks_uri}: {exc}"
+        ) from exc
+    return KeySet.import_key_set(jwks_data)
+
+
+async def verify_id_token(
+    id_token: str,
+    *,
+    config: OIDCConfig,
+    discovery: dict[str, Any],
+    expected_nonce: str,
+    timeout: float = 10.0,
+) -> dict[str, Any]:
+    """Verify ``id_token``'s RS256 signature against the provider's JWKS
+    (fetched fresh -- no caching, research.md) and its `iss`/`aud`/`nonce`/
+    `exp` claims. Returns the verified claims on success; raises
+    :class:`OIDCTokenVerificationError` for any failure.
+    """
+
+    key_set = await _fetch_jwks(discovery["jwks_uri"], timeout=timeout)
+
+    try:
+        token = jwt.decode(id_token, key_set, algorithms=["RS256"])
+        claims_registry = jwt.JWTClaimsRegistry(
+            iss={"essential": True, "value": config.issuer_url},
+            aud={"essential": True, "value": config.client_id},
+            nonce={"essential": True, "value": expected_nonce},
+        )
+        claims_registry.validate(token.claims)
+    except jose_errors.JoseError as exc:
+        raise OIDCTokenVerificationError(
+            f"ID token verification failed: {exc}"
+        ) from exc
+
+    return token.claims
+
+
 __all__ = [
     "AuthorizationRequestStore",
     "InFlightAuthRequest",
     "OIDCConfig",
     "OIDCDiscoveryError",
+    "OIDCTokenVerificationError",
     "build_authorization_url",
     "fetch_discovery_document",
     "resolve_oidc_config",
+    "verify_id_token",
 ]

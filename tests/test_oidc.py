@@ -566,9 +566,7 @@ class TestVerifyIdToken:
                 redirect_uri="https://host/curu-auth/oidc/callback",
             )
             now = int(time.time())
-            token = _sign(
-                key, _valid_claims(exp=now - 100, iat=now - 400)
-            )
+            token = _sign(key, _valid_claims(exp=now - 100, iat=now - 400))
 
             with pytest.raises(OIDCTokenVerificationError):
                 await verify_id_token(
