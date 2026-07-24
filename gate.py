@@ -42,7 +42,11 @@ LOGIN_PATH = "/curu-auth/login"
 #: plain HTTP, never cross-site.
 COOKIE_NAME = "curu_auth"
 
-_COOKIE_MAX_AGE_SECONDS = 60 * 60 * 24 * 30  # 30 days
+#: Public (not `_`-prefixed) because oidc.py's callback handler mints a
+#: session cookie through this exact same mechanism (ADR-002) and needs
+#: the identical max_age -- a second real consumer, same reasoning as
+#: `client_key`'s own promotion.
+COOKIE_MAX_AGE_SECONDS = 60 * 60 * 24 * 30  # 30 days
 
 
 def generate_credential() -> str:
@@ -557,7 +561,7 @@ def build_login_routes(
         redirect.set_cookie(
             COOKIE_NAME,
             session_token,
-            max_age=_COOKIE_MAX_AGE_SECONDS,
+            max_age=COOKIE_MAX_AGE_SECONDS,
             httponly=True,
             secure=True,
             samesite="Strict",
@@ -571,6 +575,7 @@ def build_login_routes(
 
 
 __all__ = [
+    "COOKIE_MAX_AGE_SECONDS",
     "COOKIE_NAME",
     "LOGIN_PATH",
     "RateLimiter",

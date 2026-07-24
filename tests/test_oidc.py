@@ -599,3 +599,215 @@ class TestVerifyIdToken:
                 expected_nonce="expected-nonce",
                 timeout=2.0,
             )
+
+
+# --------------------------------------------------------------------------
+# Callback handler -- T017/T018, T019/T020, T021/T022.
+# --------------------------------------------------------------------------
+
+_CALLBACK_PATH = "/curu-auth/oidc/callback"
+
+
+def _mock_provider_app(key, holder: dict) -> web.Application:
+    """A mocked OIDC provider serving discovery/JWKS/token -- ``holder``
+    is filled in lazily (base_url isn't known until the TestServer
+    actually starts) and read by the handlers via closure. ``holder["nonce"]``
+    controls the nonce embedded in the minted id_token, so each test can
+    simulate a callback whose in-flight nonce it controls independently.
+    """
+
+    async def _discovery_handler(request: web.Request) -> web.Response:
+        base = holder["base_url"]
+        return web.json_response(
+            {
+                "issuer": base,
+                "authorization_endpoint": f"{base}/api/oidc/authorization",
+                "token_endpoint": f"{base}/api/oidc/token",
+                "jwks_uri": f"{base}/jwks.json",
+            }
+        )
+
+    async def _jwks_handler(request: web.Request) -> web.Response:
+        return web.json_response(_jwks_for(key))
+
+    async def _token_handler(request: web.Request) -> web.Response:
+        claims = _valid_claims(
+            nonce=holder["nonce"], iss=holder["base_url"], aud=_CLIENT_ID
+        )
+        id_token = _sign(key, claims)
+        return web.json_response(
+            {
+                "access_token": "mock-access-token",
+                "id_token": id_token,
+                "token_type": "bearer",
+                "expires_in": 3600,
+            }
+        )
+
+    app = web.Application()
+    app.router.add_get("/.well-known/openid-configuration", _discovery_handler)
+    app.router.add_get("/jwks.json", _jwks_handler)
+    app.router.add_post("/api/oidc/token", _token_handler)
+    return app
+
+
+class TestOidcCallbackHandler:
+    """The callback handler is the one place this feature mints a
+    session -- it MUST reuse the *existing* `SessionStore`/`curu_auth`
+    cookie mechanism (ADR-002/FR-003), not a new one, and MUST reject a
+    mismatched or already-consumed `state` (FR-011)."""
+
+    async def test_valid_callback_establishes_a_session_via_existing_sessionstore(
+        self,
+    ) -> None:
+        from gate import COOKIE_MAX_AGE_SECONDS, COOKIE_NAME, SessionStore
+        from oidc import AuthorizationRequestStore, OIDCConfig, build_oidc_routes
+
+        key = _generate_rsa_key()
+        holder: dict = {}
+        provider_app = _mock_provider_app(key, holder)
+
+        async with TestClient(TestServer(provider_app)) as provider_client:
+            holder["base_url"] = str(provider_client.make_url("")).rstrip("/")
+
+            config = OIDCConfig(
+                issuer_url=holder["base_url"],
+                client_id=_CLIENT_ID,
+                client_secret="s3cr3t",
+                redirect_uri=f"https://comfyui.example{_CALLBACK_PATH}",
+            )
+            store = AuthorizationRequestStore()
+            sessions = SessionStore()
+            in_flight = store.create()
+            holder["nonce"] = in_flight.nonce
+
+            _start, callback = build_oidc_routes(
+                config, sessions=sessions, store=store
+            )
+            node_app = web.Application()
+            node_app.router.add_get(_CALLBACK_PATH, callback)
+
+            async with TestClient(TestServer(node_app)) as node_client:
+                response = await node_client.get(
+                    _CALLBACK_PATH,
+                    params={"code": "mock-auth-code", "state": in_flight.state},
+                    allow_redirects=False,
+                )
+
+        assert response.status in (302, 303, 307)
+        cookie = response.cookies.get(COOKIE_NAME)
+        assert cookie is not None
+        assert sessions.is_valid(cookie.value)
+        assert cookie["max-age"] == str(COOKIE_MAX_AGE_SECONDS)
+        assert cookie["httponly"]
+        assert cookie["secure"]
+
+    async def test_mismatched_state_does_not_establish_a_session(self) -> None:
+        from gate import SessionStore
+        from oidc import AuthorizationRequestStore, OIDCConfig, build_oidc_routes
+
+        key = _generate_rsa_key()
+        holder: dict = {"nonce": "irrelevant"}
+        provider_app = _mock_provider_app(key, holder)
+
+        async with TestClient(TestServer(provider_app)) as provider_client:
+            holder["base_url"] = str(provider_client.make_url("")).rstrip("/")
+
+            config = OIDCConfig(
+                issuer_url=holder["base_url"],
+                client_id=_CLIENT_ID,
+                client_secret="s3cr3t",
+                redirect_uri=f"https://comfyui.example{_CALLBACK_PATH}",
+            )
+            store = AuthorizationRequestStore()
+            sessions = SessionStore()
+            store.create()  # a real in-flight request exists, but...
+
+            _start, callback = build_oidc_routes(
+                config, sessions=sessions, store=store
+            )
+            node_app = web.Application()
+            node_app.router.add_get(_CALLBACK_PATH, callback)
+
+            async with TestClient(TestServer(node_app)) as node_client:
+                response = await node_client.get(
+                    _CALLBACK_PATH,
+                    # ...the callback presents a state nobody issued.
+                    params={"code": "mock-auth-code", "state": "never-issued"},
+                    allow_redirects=False,
+                )
+
+        assert response.status not in (302, 303, 307)
+        assert "curu_auth" not in response.cookies
+
+    async def test_provider_error_param_does_not_establish_a_session(self) -> None:
+        from gate import SessionStore
+        from oidc import AuthorizationRequestStore, OIDCConfig, build_oidc_routes
+
+        config = OIDCConfig(
+            issuer_url="https://idp.example.com",
+            client_id=_CLIENT_ID,
+            client_secret="s3cr3t",
+            redirect_uri=f"https://comfyui.example{_CALLBACK_PATH}",
+        )
+        store = AuthorizationRequestStore()
+        sessions = SessionStore()
+        in_flight = store.create()
+
+        _start, callback = build_oidc_routes(config, sessions=sessions, store=store)
+        node_app = web.Application()
+        node_app.router.add_get(_CALLBACK_PATH, callback)
+
+        async with TestClient(TestServer(node_app)) as node_client:
+            response = await node_client.get(
+                _CALLBACK_PATH,
+                params={
+                    "error": "access_denied",
+                    "state": in_flight.state,
+                },
+                allow_redirects=False,
+            )
+
+        assert response.status not in (302, 303, 307)
+        assert "curu_auth" not in response.cookies
+
+    async def test_replaying_a_completed_callback_verbatim_is_rejected(self) -> None:
+        from gate import SessionStore
+        from oidc import AuthorizationRequestStore, OIDCConfig, build_oidc_routes
+
+        key = _generate_rsa_key()
+        holder: dict = {}
+        provider_app = _mock_provider_app(key, holder)
+
+        async with TestClient(TestServer(provider_app)) as provider_client:
+            holder["base_url"] = str(provider_client.make_url("")).rstrip("/")
+
+            config = OIDCConfig(
+                issuer_url=holder["base_url"],
+                client_id=_CLIENT_ID,
+                client_secret="s3cr3t",
+                redirect_uri=f"https://comfyui.example{_CALLBACK_PATH}",
+            )
+            store = AuthorizationRequestStore()
+            sessions = SessionStore()
+            in_flight = store.create()
+            holder["nonce"] = in_flight.nonce
+
+            _start, callback = build_oidc_routes(
+                config, sessions=sessions, store=store
+            )
+            node_app = web.Application()
+            node_app.router.add_get(_CALLBACK_PATH, callback)
+
+            async with TestClient(TestServer(node_app)) as node_client:
+                params = {"code": "mock-auth-code", "state": in_flight.state}
+                first = await node_client.get(
+                    _CALLBACK_PATH, params=params, allow_redirects=False
+                )
+                assert first.status in (302, 303, 307)
+
+                second = await node_client.get(
+                    _CALLBACK_PATH, params=params, allow_redirects=False
+                )
+
+        assert second.status not in (302, 303, 307)
