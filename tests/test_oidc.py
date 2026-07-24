@@ -631,6 +631,17 @@ def _mock_provider_app(key, holder: dict) -> web.Application:
         return web.json_response(_jwks_for(key))
 
     async def _token_handler(request: web.Request) -> web.Response:
+        # A real OIDC provider (Authelia included) rejects a code exchange
+        # missing the PKCE `code_verifier` -- or carrying a wrong one --
+        # with a 400. Only enforced when a test opts in via
+        # ``holder["pkce_verifier"]`` (start-route-only tests never reach
+        # this handler at all, and don't set it).
+        expected_verifier = holder.get("pkce_verifier")
+        if expected_verifier is not None:
+            body = await request.post()
+            if body.get("code_verifier") != expected_verifier:
+                return web.json_response({"error": "invalid_grant"}, status=400)
+
         claims = _valid_claims(
             nonce=holder["nonce"], iss=holder["base_url"], aud=_CLIENT_ID
         )
@@ -680,6 +691,12 @@ class TestOidcCallbackHandler:
             sessions = SessionStore()
             in_flight = store.create()
             holder["nonce"] = in_flight.nonce
+            # Regression witness for the token exchange actually presenting
+            # the PKCE code_verifier it promised in the authorization
+            # request's code_challenge (RFC 7636) -- found live against a
+            # real Authelia instance, which rejects a code exchange missing
+            # it with a 400 (specs/002-oidc-login/research.md).
+            holder["pkce_verifier"] = in_flight.pkce_verifier
 
             _start, callback = build_oidc_routes(config, sessions=sessions, store=store)
             node_app = web.Application()
@@ -788,6 +805,7 @@ class TestOidcCallbackHandler:
             sessions = SessionStore()
             in_flight = store.create()
             holder["nonce"] = in_flight.nonce
+            holder["pkce_verifier"] = in_flight.pkce_verifier
 
             _start, callback = build_oidc_routes(config, sessions=sessions, store=store)
             node_app = web.Application()
