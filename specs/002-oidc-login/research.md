@@ -411,6 +411,44 @@ that other route sits downstream of it in the same legitimate flow --
 worth tracing the full happy-path sequence through every rate-limited
 checkpoint, not just each route in isolation.
 
+## T042 sanity check: hermetic coverage catches a broken `verify_id_token`, the live suite does not (by design, not a gap)
+
+**What was done**: Temporarily replaced `verify_id_token`'s body with a
+version that decodes the ID token's payload without checking its
+signature or `iss`/`aud`/`nonce`/`exp` claims at all (accepts any
+signature, forged or not) — mirroring spec 001's own T013 sanity check.
+Ran the hermetic suite, then the live T028 test, then reverted.
+
+**What happened**: `tests/test_oidc.py::TestVerifyIdToken` failed loudly
+and correctly — 4 of its 6 tests (`test_wrong_signature_is_rejected`,
+`test_wrong_audience_is_rejected`, `test_wrong_nonce_is_rejected`,
+`test_expired_token_is_rejected`) now failed with "DID NOT RAISE",
+proving this hermetic coverage is load-bearing, not tautological.
+
+The live T028 test, however, **still passed** against the sabotaged
+code. This diverges from this task's own original (speculative,
+written before implementation) prediction that both would fail.
+Reasoning in hindsight: T028 is a happy-path-only test against a real
+Authelia instance -- it never presents a forged or malformed token,
+because the only way to get one into the flow is a compromised network
+intermediary, which a live test against a real, uncompromised IDP has
+no way to simulate meaningfully (forging a token to send TO Authelia
+proves nothing about verifying a token FROM it). A real IDP's own
+correctly-signed, correctly-claimed token satisfies every check
+whether or not this code actually performs them, so removing the
+checks is invisible to a happy-path-only live test by construction.
+
+**Conclusion**: this is the correct division of responsibility, not a
+gap to close. The hermetic suite is where a broken signature/claims
+check *can* be caught (and is), because only it can construct a
+deliberately-invalid token; the live suite's job is proving the real
+integration (network, TLS, real provider responses, PKCE, timing)
+works end-to-end, not re-proving cryptographic correctness a real
+provider can't help exercise. No code or task changes followed from
+this — recorded here so the next person who re-runs this sanity check
+doesn't rediscover the same "why didn't T028 fail too" surprise from
+scratch.
+
 ## Decision: No `contracts/` directory
 
 **Rationale**: Consistent with `specs/001-docker-comfyui-harness/`'s own

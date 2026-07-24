@@ -45,6 +45,28 @@ Set it however you start ComfyUI — shell export, a systemd unit's
 `Environment=`, a `docker-compose.yml` `environment:` entry. Unset (the
 default) keeps a fresh random credential every restart.
 
+## Optional: log in through your own identity provider
+
+```bash
+export COMFYUI_CURU_AUTH_OIDC_ISSUER_URL="https://your-idp.example.com"
+export COMFYUI_CURU_AUTH_OIDC_CLIENT_ID="comfyui-curu-auth"
+export COMFYUI_CURU_AUTH_OIDC_CLIENT_SECRET="<registered client secret>"
+export COMFYUI_CURU_AUTH_OIDC_REDIRECT_URI="https://your-comfyui-host/curu-auth/oidc/callback"
+```
+
+All four are optional, but MUST be set together — any subset (e.g. an
+issuer URL with no client secret) is treated exactly like none at all:
+ComfyUI starts with no OIDC routes and no OIDC option on the login page,
+same as today. Set all four and restart, and the login page offers "Log
+in with your identity provider" alongside the existing credential field
+— a successful login there lands you in the same `curu_auth` session
+cookie the credential-based form already sets. The Bearer-header path for
+automated clients is unaffected either way.
+
+See [`specs/002-oidc-login/quickstart.md`](specs/002-oidc-login/quickstart.md)
+for a full walkthrough, including running the live suite against a real
+Authelia instance.
+
 ## Repeated failures back off — on every path
 
 <img src="docs/screenshots/rate-limited.png" width="480" alt="Rate-limited login screen with a live countdown">
@@ -67,6 +89,7 @@ Every rejected request also writes one stable, greppable log line:
 ```
 comfyui_curu_auth: authentication failure from 203.0.113.7 (GET /object_info)
 comfyui_curu_auth: authentication failure from 203.0.113.7 (login form)
+comfyui_curu_auth: authentication failure from 203.0.113.7 (oidc callback)
 ```
 
 Ready-to-install fail2ban and crowdsec config, plus step-by-step

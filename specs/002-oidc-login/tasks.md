@@ -362,17 +362,17 @@ and logging behavior as the existing paths.
 
 ## Phase 6: Polish & Cross-Cutting Concerns
 
-- [ ] T040 [P] Update README.md: document the four `COMFYUI_CURU_AUTH_OIDC_*`
+- [x] T040 [P] Update README.md: document the four `COMFYUI_CURU_AUTH_OIDC_*`
       environment variables and link to `specs/002-oidc-login/quickstart.md`
-- [ ] T041 Manually walk through `quickstart.md` end-to-end (configure,
+- [x] T041 Manually walk through `quickstart.md` end-to-end (configure,
       restart, log in via Authelia, confirm session) and correct any drift
-- [ ] T042 One-time manual regression sanity check (mirrors spec 001's
+- [x] T042 One-time manual regression sanity check (mirrors spec 001's
       T013): temporarily break the ID-token verification (e.g. accept any
       signature), confirm T015-T's hermetic coverage and the live T028
       test both fail loudly, then revert. Proves the suite isn't
       tautologically green on the security-critical path this feature
       adds.
-- [ ] T043 [P] `beacon doctor --strict` clean before calling this
+- [x] T043 [P] `beacon doctor --strict` clean before calling this
       feature's bullets done
 
 ---
