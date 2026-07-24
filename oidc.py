@@ -48,6 +48,13 @@ except ImportError:
     # exists for a relative import to resolve against.
     from gate import COOKIE_MAX_AGE_SECONDS, COOKIE_NAME, SessionStore
 
+#: The two OIDC routes -- reachable pre-session by definition, so
+#: __init__.py registers them in gate.py's `public_paths` set (ADR-003)
+#: only when OIDC is actually configured. Module-level constants, not
+#: inlined in __init__.py, matching gate.py's own LOGIN_PATH precedent.
+OIDC_START_PATH = "/curu-auth/oidc/start"
+OIDC_CALLBACK_PATH = "/curu-auth/oidc/callback"
+
 
 class OIDCDiscoveryError(Exception):
     """Raised for any failure fetching or parsing the identity provider's
@@ -381,6 +388,8 @@ def build_oidc_routes(
 
 
 __all__ = [
+    "OIDC_CALLBACK_PATH",
+    "OIDC_START_PATH",
     "AuthorizationRequestStore",
     "InFlightAuthRequest",
     "OIDCConfig",
