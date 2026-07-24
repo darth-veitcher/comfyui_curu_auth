@@ -238,22 +238,22 @@ confirm the same `curu_auth` cookie session results.
 - [x] T022-I [US1] Ensure the callback handler deletes the In-Flight Auth
       Request entry on every path (success and failure) before it
       returns, so T021-T passes
-- [ ] T023-I [US1] Wire `oidc.py`'s routes into `__init__.py`: only
+- [x] T023-I [US1] Wire `oidc.py`'s routes into `__init__.py`: only
       registered when `resolve_oidc_config()` returns non-`None`, using
       T005-I's `public_paths` mechanism for the start/callback routes
       (ADR-003). **Split from the template change below** — adversarial
       engineering review found the original single task bundled route
       wiring with a login-page template change with asymmetric test
       coverage; kept as separate, focused tasks here.
-- [ ] T024-T [US1] Write a FAILING hermetic test in `tests/test_oidc.py`:
+- [x] T024-T [US1] Write a FAILING hermetic test in `tests/test_oidc.py`:
       the rendered login page includes the OIDC login option when
       `resolve_oidc_config()` returns non-`None`. **Added after
       adversarial engineering review** — the original task only tested
       the option's *absence* when unconfigured (now T031-T in US2); this
       is the missing positive counterpart. **Fails now**.
-- [ ] T025-I [US1] Add the OIDC login option to `_LOGIN_PAGE_TEMPLATE`
+- [x] T025-I [US1] Add the OIDC login option to `_LOGIN_PAGE_TEMPLATE`
       (or an equivalent conditional render) so T024-T passes
-- [ ] T026-T [US1] Write a FAILING hermetic test in `tests/test_oidc.py`:
+- [x] T026-T [US1] Write a FAILING hermetic test in `tests/test_oidc.py`:
       the OIDC start route, hit repeatedly by the same client identity,
       is subject to the *existing* shared `RateLimiter` exactly like the
       login form and Bearer-header paths, and the In-Flight Auth Request
@@ -264,7 +264,7 @@ confirm the same `curu_auth` cookie session results.
       resource-exhaustion path. References the feature file's "The
       login-initiation route is rate-limited and bounded" scenario.
       **Fails now**.
-- [ ] T027-I [US1] Wire the shared `RateLimiter` onto the start route and
+- [x] T027-I [US1] Wire the shared `RateLimiter` onto the start route and
       add the In-Flight store's size cap so T026-T passes
 - [ ] T028 [US1] Write a live `system`-marked test in
       `tests/system/test_oidc_harness.py`: drive the full authorization-
