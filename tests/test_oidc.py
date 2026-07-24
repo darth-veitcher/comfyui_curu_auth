@@ -1,14 +1,21 @@
 """Hermetic coverage for :mod:`oidc` -- the OIDC/OAuth login path's pure,
 testable logic (config resolution, authorization-URL building, ID-token
 verification, the callback handler), driven against a mocked provider
-double via ``aiohttp.test_utils``. Never imports ``__init__`` -- only
-``oidc.py`` and ``gate.py`` directly, mirroring ``tests/test_gate.py``'s
-own hermetic conventions.
+double via ``aiohttp.test_utils``. Mostly exercises ``oidc.py`` and
+``gate.py`` directly, mirroring ``tests/test_gate.py``'s own hermetic
+conventions -- except ``TestInitPyWiringIsOidcAware`` below, which loads
+the real ``__init__.py`` against a minimal double of ComfyUI's own
+``server`` module, because the actual routing decision US2 cares about
+(are the OIDC routes registered at all?) only exists at that level.
 """
 
 from __future__ import annotations
 
 import asyncio
+import importlib.util
+import sys
+import types
+from pathlib import Path
 
 import pytest
 from aiohttp import web
@@ -137,6 +144,25 @@ class TestResolveOidcConfig:
                 client_id="comfyui-curu-auth",
                 client_secret=None,
                 redirect_uri="https://host/curu-auth/oidc/callback",
+            )
+            is None
+        )
+
+    def test_missing_redirect_uri_resolves_to_none_not_a_partial_config(
+        self,
+    ) -> None:
+        # FR-009 / spec.md's Edge Cases: the *other* partial-config example
+        # it names alongside a missing client secret -- an issuer, client
+        # ID, and secret with no redirect URI must fail safe identically,
+        # not start half-configured missing just the callback target.
+        from oidc import resolve_oidc_config
+
+        assert (
+            resolve_oidc_config(
+                issuer_url="https://idp.example.com",
+                client_id="comfyui-curu-auth",
+                client_secret="s3cr3t",
+                redirect_uri=None,
             )
             is None
         )
@@ -936,3 +962,148 @@ class TestOidcStartRouteIsRateLimitedAndCapped:
                     await node_client.get(_START_PATH, allow_redirects=False)
 
         assert len(store) == 3
+
+
+# --------------------------------------------------------------------------
+# __init__.py's own wiring -- T029/T030, T031/T032 (US2).
+# --------------------------------------------------------------------------
+
+_REPO_ROOT = Path(__file__).resolve().parents[1]
+
+
+def _load_init_with_fake_server(
+    monkeypatch: pytest.MonkeyPatch, *, oidc_env: dict[str, str] | None = None
+) -> web.Application:
+    """Load this repo's own ``__init__.py`` as a real package's ``__init__``
+    module against a minimal double of ComfyUI's own ``server`` module,
+    and return the ``web.Application`` it wired up.
+
+    ``__init__.py``'s ``from .gate import ...`` / ``from .oidc import
+    ...`` are genuine relative imports -- they need a real parent-package
+    context to resolve at all, the same one ComfyUI's custom-node loader
+    gives this directory at runtime (its own docstring). A bare
+    ``importlib.util.spec_from_file_location`` with no
+    ``submodule_search_locations`` can't satisfy that; passing this
+    repo's own root directory as the search path can, letting
+    ``__init__.py`` run completely unmodified.
+
+    Every OIDC env var is cleared first regardless of ``oidc_env`` -- the
+    ambient shell environment must never leak into what this test
+    considers "unconfigured".
+    """
+
+    for var in (
+        "COMFYUI_CURU_AUTH_OIDC_ISSUER_URL",
+        "COMFYUI_CURU_AUTH_OIDC_CLIENT_ID",
+        "COMFYUI_CURU_AUTH_OIDC_CLIENT_SECRET",
+        "COMFYUI_CURU_AUTH_OIDC_REDIRECT_URI",
+    ):
+        monkeypatch.delenv(var, raising=False)
+    for key, value in (oidc_env or {}).items():
+        monkeypatch.setenv(key, value)
+
+    app = web.Application()
+
+    class _Instance:
+        def __init__(self, app: web.Application) -> None:
+            self.app = app
+
+    class _FakePromptServer:
+        instance: _Instance
+
+    _FakePromptServer.instance = _Instance(app)
+
+    fake_server = types.ModuleType("server")
+    fake_server.PromptServer = _FakePromptServer  # ty: ignore[unresolved-attribute]
+    monkeypatch.setitem(sys.modules, "server", fake_server)
+
+    pkg_name = "_comfyui_curu_auth_under_test"
+    for name in (pkg_name, f"{pkg_name}.gate", f"{pkg_name}.oidc"):
+        monkeypatch.delitem(sys.modules, name, raising=False)
+
+    spec = importlib.util.spec_from_file_location(
+        pkg_name,
+        _REPO_ROOT / "__init__.py",
+        submodule_search_locations=[str(_REPO_ROOT)],
+    )
+    assert spec is not None and spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    monkeypatch.setitem(sys.modules, pkg_name, module)
+    spec.loader.exec_module(module)
+    return app
+
+
+def _registered_paths(app: web.Application) -> set[str]:
+    return {
+        route.resource.canonical
+        for route in app.router.routes()
+        if route.resource is not None
+    }
+
+
+class TestInitPyWiringIsOidcAware:
+    """``__init__.py`` is this project's real ComfyUI entrypoint -- the
+    one place that decides, from the environment, whether OIDC routes
+    exist at all (US2/FR-002/FR-004/FR-009). References the feature
+    file's "No OIDC routes or behavior when unconfigured" and "Existing
+    credential and login form are unaffected" scenarios."""
+
+    def test_no_oidc_routes_when_unconfigured(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        app = _load_init_with_fake_server(monkeypatch)
+
+        paths = _registered_paths(app)
+        assert "/curu-auth/oidc/start" not in paths
+        assert "/curu-auth/oidc/callback" not in paths
+
+    def test_oidc_routes_exist_when_fully_configured(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        app = _load_init_with_fake_server(
+            monkeypatch,
+            oidc_env={
+                "COMFYUI_CURU_AUTH_OIDC_ISSUER_URL": "https://idp.example.com",
+                "COMFYUI_CURU_AUTH_OIDC_CLIENT_ID": "client-id",
+                "COMFYUI_CURU_AUTH_OIDC_CLIENT_SECRET": "s3cr3t",
+                "COMFYUI_CURU_AUTH_OIDC_REDIRECT_URI": (
+                    "https://comfyui.example/curu-auth/oidc/callback"
+                ),
+            },
+        )
+
+        paths = _registered_paths(app)
+        assert "/curu-auth/oidc/start" in paths
+        assert "/curu-auth/oidc/callback" in paths
+
+    async def test_login_page_has_no_oidc_option_when_unconfigured(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        app = _load_init_with_fake_server(monkeypatch)
+
+        async with TestClient(TestServer(app)) as client:
+            response = await client.get(LOGIN_PATH)
+            body = await response.text()
+
+        assert "identity provider" not in body
+
+    async def test_login_page_has_oidc_option_when_configured(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        app = _load_init_with_fake_server(
+            monkeypatch,
+            oidc_env={
+                "COMFYUI_CURU_AUTH_OIDC_ISSUER_URL": "https://idp.example.com",
+                "COMFYUI_CURU_AUTH_OIDC_CLIENT_ID": "client-id",
+                "COMFYUI_CURU_AUTH_OIDC_CLIENT_SECRET": "s3cr3t",
+                "COMFYUI_CURU_AUTH_OIDC_REDIRECT_URI": (
+                    "https://comfyui.example/curu-auth/oidc/callback"
+                ),
+            },
+        )
+
+        async with TestClient(TestServer(app)) as client:
+            response = await client.get(LOGIN_PATH)
+            body = await response.text()
+
+        assert "identity provider" in body

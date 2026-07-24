@@ -289,35 +289,35 @@ hermetic suite (`tests/test_gate.py`) and the existing live suite
 (`tests/system/test_docker_harness.py`) both still pass completely
 unmodified, and that no OIDC routes exist.
 
-- [ ] T029-T [US2] Write a FAILING hermetic test in `tests/test_oidc.py`:
+- [x] T029-T [US2] Write a FAILING hermetic test in `tests/test_oidc.py`:
       when `resolve_oidc_config()` returns `None`, `__init__.py`'s wiring
       registers no OIDC routes on the app. References the feature file's
       "No OIDC routes or behavior when unconfigured" scenario. **Fails
       now** — `__init__.py` doesn't yet check this condition (T023-I only
       just made it possible to check).
-- [ ] T030-I [US2] Confirm/adjust `__init__.py`'s conditional wiring (from
+- [x] T030-I [US2] Confirm/adjust `__init__.py`'s conditional wiring (from
       T023-I) so T029-T passes — this task is largely verification that
       T023-I's design already satisfies US2, not new code
-- [ ] T031-T [US2] Write a FAILING hermetic test in `tests/test_oidc.py`:
+- [x] T031-T [US2] Write a FAILING hermetic test in `tests/test_oidc.py`:
       the rendered login page does NOT include the OIDC login option when
       `resolve_oidc_config()` returns `None`. **Fails now** until T025-I's
       conditional render is confirmed to also handle the negative case
       correctly.
-- [ ] T032-I [US2] Confirm/adjust the template conditional so T031-T passes
-- [ ] T033 [US2] Run the full existing `tests/test_gate.py` (44 tests) and
+- [x] T032-I [US2] Confirm/adjust the template conditional so T031-T passes
+- [x] T033 [US2] Run the full existing `tests/test_gate.py` (44 tests) and
       `tests/system/test_docker_harness.py` (5 tests) suites, unmodified,
       with OIDC left unconfigured throughout. Both MUST pass exactly as
       before this feature existed (FR-002/FR-004; references the feature
       file's "Existing credential and login form are unaffected" scenario)
       — this is the acceptance evidence, not a new test to write.
-- [ ] T034-T [US2] Write a FAILING hermetic test in `tests/test_oidc.py`
+- [x] T034-T [US2] Write a FAILING hermetic test in `tests/test_oidc.py`
       for the partial-configuration edge case: e.g. an issuer URL and
       client ID present but no client secret MUST resolve to the same
       "unconfigured" state as no configuration at all (FR-009) — already
       partly covered by T007-T's own assertion; this task adds the
       specific edge-case regression the spec's Edge Cases section calls
       out. **Fails now** if not already covered.
-- [ ] T035-I [US2] Adjust `resolve_oidc_config()` if T034-T reveals a gap;
+- [x] T035-I [US2] Adjust `resolve_oidc_config()` if T034-T reveals a gap;
       otherwise confirm it already passes
 
 **Checkpoint**: User Stories 1 AND 2 both work — OIDC login works, and its
