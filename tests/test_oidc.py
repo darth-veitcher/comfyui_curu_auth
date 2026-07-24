@@ -228,3 +228,156 @@ class TestFetchDiscoveryDocument:
             base_url = str(client.make_url(""))
             with pytest.raises(OIDCDiscoveryError):
                 await fetch_discovery_document(base_url.rstrip("/"), timeout=5.0)
+
+
+# --------------------------------------------------------------------------
+# Authorization-URL builder + In-Flight Auth Request store -- T013/T014.
+# --------------------------------------------------------------------------
+
+_CONFIG_KWARGS = {
+    "issuer_url": "https://idp.example.com",
+    "client_id": "comfyui-curu-auth",
+    "client_secret": "s3cr3t",
+    "redirect_uri": "https://host/curu-auth/oidc/callback",
+}
+
+
+class TestBuildAuthorizationUrl:
+    """`build_authorization_url` must produce a redirect URL carrying
+    `state`, `nonce`, and a PKCE `code_challenge`, and record the matching
+    In-Flight Auth Request (data-model.md) keyed by `state` -- the PKCE
+    challenge must actually derive correctly from the stored verifier
+    (`base64url(sha256(verifier))`), not merely be present (strengthened
+    after adversarial engineering review, 2026-07-23)."""
+
+    def test_url_targets_the_discovery_authorization_endpoint(self) -> None:
+        from oidc import AuthorizationRequestStore, OIDCConfig, build_authorization_url
+        from urllib.parse import urlparse
+
+        config = OIDCConfig(**_CONFIG_KWARGS)
+        store = AuthorizationRequestStore()
+
+        url = build_authorization_url(config, _DISCOVERY_DOCUMENT, store)
+
+        parsed = urlparse(url)
+        expected = urlparse(_DISCOVERY_DOCUMENT["authorization_endpoint"])
+        assert (parsed.scheme, parsed.netloc, parsed.path) == (
+            expected.scheme,
+            expected.netloc,
+            expected.path,
+        )
+
+    def test_query_carries_client_id_redirect_uri_response_type_and_scope(
+        self,
+    ) -> None:
+        from oidc import AuthorizationRequestStore, OIDCConfig, build_authorization_url
+        from urllib.parse import parse_qs, urlparse
+
+        config = OIDCConfig(**_CONFIG_KWARGS)
+        store = AuthorizationRequestStore()
+
+        url = build_authorization_url(config, _DISCOVERY_DOCUMENT, store)
+        query = parse_qs(urlparse(url).query)
+
+        assert query["client_id"] == [config.client_id]
+        assert query["redirect_uri"] == [config.redirect_uri]
+        assert query["response_type"] == ["code"]
+        assert "openid" in query["scope"][0]
+        assert query["code_challenge_method"] == ["S256"]
+
+    def test_code_challenge_actually_derives_from_the_stored_verifier(
+        self,
+    ) -> None:
+        import base64
+        import hashlib
+        from urllib.parse import parse_qs, urlparse
+
+        from oidc import AuthorizationRequestStore, OIDCConfig, build_authorization_url
+
+        config = OIDCConfig(**_CONFIG_KWARGS)
+        store = AuthorizationRequestStore()
+
+        url = build_authorization_url(config, _DISCOVERY_DOCUMENT, store)
+        query = parse_qs(urlparse(url).query)
+        state = query["state"][0]
+        code_challenge = query["code_challenge"][0]
+
+        in_flight = store.peek(state)
+        assert in_flight is not None
+        expected_challenge = (
+            base64.urlsafe_b64encode(
+                hashlib.sha256(in_flight.pkce_verifier.encode("ascii")).digest()
+            )
+            .rstrip(b"=")
+            .decode("ascii")
+        )
+        assert code_challenge == expected_challenge
+
+    def test_state_and_nonce_match_the_stored_in_flight_request(self) -> None:
+        from urllib.parse import parse_qs, urlparse
+
+        from oidc import AuthorizationRequestStore, OIDCConfig, build_authorization_url
+
+        config = OIDCConfig(**_CONFIG_KWARGS)
+        store = AuthorizationRequestStore()
+
+        url = build_authorization_url(config, _DISCOVERY_DOCUMENT, store)
+        query = parse_qs(urlparse(url).query)
+
+        in_flight = store.peek(query["state"][0])
+        assert in_flight is not None
+        assert in_flight.nonce == query["nonce"][0]
+
+    def test_two_consecutive_calls_produce_distinct_state_and_nonce(self) -> None:
+        from urllib.parse import parse_qs, urlparse
+
+        from oidc import AuthorizationRequestStore, OIDCConfig, build_authorization_url
+
+        config = OIDCConfig(**_CONFIG_KWARGS)
+        store = AuthorizationRequestStore()
+
+        url1 = build_authorization_url(config, _DISCOVERY_DOCUMENT, store)
+        url2 = build_authorization_url(config, _DISCOVERY_DOCUMENT, store)
+        q1 = parse_qs(urlparse(url1).query)
+        q2 = parse_qs(urlparse(url2).query)
+
+        assert q1["state"] != q2["state"]
+        assert q1["nonce"] != q2["nonce"]
+
+
+class TestAuthorizationRequestStoreSingleUseAndCap:
+    """FR-010 (adversarial engineering review): the store's total size
+    MUST be bounded -- the login-initiation route that creates entries is
+    necessarily unauthenticated (public_paths), so nothing else limits
+    how many entries an attacker could otherwise cause it to hold."""
+
+    def test_pop_removes_the_entry_single_use(self) -> None:
+        from oidc import AuthorizationRequestStore
+
+        store = AuthorizationRequestStore()
+        in_flight = store.create()
+
+        first = store.pop(in_flight.state)
+        second = store.pop(in_flight.state)
+
+        assert first is not None
+        assert first.state == in_flight.state
+        assert second is None
+
+    def test_pop_of_an_unknown_state_returns_none(self) -> None:
+        from oidc import AuthorizationRequestStore
+
+        store = AuthorizationRequestStore()
+        assert store.pop("never-issued-state") is None
+
+    def test_store_evicts_oldest_entries_once_the_cap_is_exceeded(self) -> None:
+        from oidc import AuthorizationRequestStore
+
+        store = AuthorizationRequestStore(max_size=3)
+        first = store.create()
+        store.create()
+        store.create()
+        store.create()  # exceeds cap of 3 -- oldest (first) must be evicted
+
+        assert store.peek(first.state) is None
+        assert len(store) == 3
