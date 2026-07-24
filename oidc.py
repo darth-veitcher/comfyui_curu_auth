@@ -17,10 +17,11 @@ from __future__ import annotations
 
 import base64
 import hashlib
+import logging
 import secrets
 import time
 from dataclasses import dataclass
-from typing import Any
+from typing import Any, NoReturn
 from urllib.parse import urlencode
 
 import aiohttp
@@ -29,6 +30,11 @@ from aiohttp.typedefs import Handler
 from joserfc import errors as jose_errors
 from joserfc import jwt
 from joserfc.jwk import KeySet
+
+#: Same logger name gate.py's own warnings use -- fail2ban/crowdsec key
+#: off one stable, greppable format regardless of which path rejected
+#: the request (research.md's T036/T037 decision).
+_logger = logging.getLogger("comfyui_curu_auth")
 
 try:
     # Real ComfyUI context: this module is loaded as <package>.oidc, with
@@ -397,7 +403,31 @@ def build_oidc_routes(
             ) from exc
         raise web.HTTPFound(build_authorization_url(config, discovery, store))
 
+    def _reject_callback(key: str, *, cause: BaseException | None = None) -> NoReturn:
+        # Same RateLimiter/logger the Bearer-header and login-form paths
+        # already use (T036/T037, US3) -- not a parallel mechanism.
+        # fail2ban/crowdsec key off this one stable, greppable format.
+        if rate_limiter is not None:
+            rate_limiter.record_failure(key)
+        _logger.warning(
+            "comfyui_curu_auth: authentication failure from %s (oidc callback)",
+            key,
+        )
+        raise web.HTTPUnauthorized(text="OIDC login failed") from cause
+
     async def callback(request: web.Request) -> web.StreamResponse:
+        key = client_key(request)
+
+        if rate_limiter is not None:
+            retry_after = rate_limiter.seconds_until_retry(key)
+            if retry_after > 0:
+                seconds = int(retry_after) + 1
+                return web.json_response(
+                    {"detail": "too many attempts", "retry_after": seconds},
+                    status=429,
+                    headers={"Retry-After": str(seconds)},
+                )
+
         state = request.query.get("state", "")
         in_flight = store.pop(state) if state else None
 
@@ -406,7 +436,7 @@ def build_oidc_routes(
         # state already consumed by a prior callback (FR-011 -- pop()
         # already made this single-use, so a replay finds nothing here).
         if "error" in request.query or in_flight is None:
-            raise web.HTTPUnauthorized(text="OIDC login failed")
+            _reject_callback(key)
 
         code = request.query.get("code", "")
         try:
@@ -422,7 +452,10 @@ def build_oidc_routes(
                 expected_nonce=in_flight.nonce,
             )
         except (OIDCDiscoveryError, OIDCTokenVerificationError, KeyError) as exc:
-            raise web.HTTPUnauthorized(text="OIDC login failed") from exc
+            _reject_callback(key, cause=exc)
+
+        if rate_limiter is not None:
+            rate_limiter.record_success(key)
 
         session_token = sessions.issue()
         redirect = web.HTTPFound("/")

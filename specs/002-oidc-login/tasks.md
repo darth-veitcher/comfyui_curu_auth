@@ -334,7 +334,7 @@ login-form paths already give one.
 state, invalid token) from the same client and confirm the same backoff
 and logging behavior as the existing paths.
 
-- [ ] T036-T [US3] Write a FAILING hermetic test in `tests/test_oidc.py`:
+- [x] T036-T [US3] Write a FAILING hermetic test in `tests/test_oidc.py`:
       a rejected OIDC callback (mismatched state, invalid/expired token,
       or provider error) calls the *existing* `RateLimiter.record_failure`
       for that client (via T006's now-public `client_key`) and emits a log
@@ -342,7 +342,7 @@ and logging behavior as the existing paths.
       authentication failure from %s (...)`) — not a new logging/rate-limit
       mechanism. References the feature file's "Failed OIDC attempts are
       logged like other paths" scenario. **Fails now**.
-- [ ] T037-I [US3] Wire the existing `RateLimiter`/logger calls into the
+- [x] T037-I [US3] Wire the existing `RateLimiter`/logger calls into the
       callback handler's failure paths so T036-T passes
 - [ ] T038-T [US3] Write a FAILING live test in
       `tests/system/test_oidc_harness.py`, paced like spec 001's own
