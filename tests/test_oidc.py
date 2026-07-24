@@ -805,3 +805,122 @@ class TestOidcCallbackHandler:
                 )
 
         assert second.status not in (302, 303, 307)
+
+
+# --------------------------------------------------------------------------
+# Start-route rate-limit + in-flight store cap -- T026/T027 (FR-010).
+# --------------------------------------------------------------------------
+
+_START_PATH = "/curu-auth/oidc/start"
+
+
+class TestOidcStartRouteIsRateLimitedAndCapped:
+    """The start route sits in the public-paths bypass by necessity (it's
+    reachable pre-session, the same as the login form already is) --
+    found during adversarial engineering review that this left it
+    unauthenticated *and* unthrottled, an unbounded resource-exhaustion
+    path. MUST be subject to the same shared `RateLimiter` every other
+    unauthenticated path already uses."""
+
+    async def test_repeated_hits_from_the_same_client_are_rate_limited(
+        self,
+    ) -> None:
+        from gate import RateLimiter, SessionStore
+        from oidc import AuthorizationRequestStore, OIDCConfig, build_oidc_routes
+
+        holder = {"base_url": "https://idp.example.com"}
+        provider_app = _mock_provider_app(_generate_rsa_key(), holder)
+
+        async with TestClient(TestServer(provider_app)) as provider_client:
+            holder["base_url"] = str(provider_client.make_url("")).rstrip("/")
+            config = OIDCConfig(
+                issuer_url=holder["base_url"],
+                client_id=_CLIENT_ID,
+                client_secret="s3cr3t",
+                redirect_uri="https://comfyui.example/curu-auth/oidc/callback",
+            )
+            store = AuthorizationRequestStore()
+            sessions = SessionStore()
+            limiter = RateLimiter()
+
+            start, _callback = build_oidc_routes(
+                config, sessions=sessions, store=store, rate_limiter=limiter
+            )
+            node_app = web.Application()
+            node_app.router.add_get(_START_PATH, start)
+
+            async with TestClient(TestServer(node_app)) as node_client:
+                first = await node_client.get(_START_PATH, allow_redirects=False)
+                assert first.status in (302, 303, 307)
+
+                second = await node_client.get(_START_PATH, allow_redirects=False)
+
+        assert second.status == 429
+        assert "Retry-After" in second.headers
+
+    async def test_without_a_rate_limiter_repeated_hits_are_never_blocked(
+        self,
+    ) -> None:
+        from gate import SessionStore
+        from oidc import AuthorizationRequestStore, OIDCConfig, build_oidc_routes
+
+        holder = {"base_url": "https://idp.example.com"}
+        provider_app = _mock_provider_app(_generate_rsa_key(), holder)
+
+        async with TestClient(TestServer(provider_app)) as provider_client:
+            holder["base_url"] = str(provider_client.make_url("")).rstrip("/")
+            config = OIDCConfig(
+                issuer_url=holder["base_url"],
+                client_id=_CLIENT_ID,
+                client_secret="s3cr3t",
+                redirect_uri="https://comfyui.example/curu-auth/oidc/callback",
+            )
+            store = AuthorizationRequestStore()
+            sessions = SessionStore()
+
+            start, _callback = build_oidc_routes(
+                config, sessions=sessions, store=store
+            )
+            node_app = web.Application()
+            node_app.router.add_get(_START_PATH, start)
+
+            async with TestClient(TestServer(node_app)) as node_client:
+                for _ in range(5):
+                    response = await node_client.get(
+                        _START_PATH, allow_redirects=False
+                    )
+                    assert response.status in (302, 303, 307)
+
+    async def test_the_store_used_by_the_start_route_stays_size_capped(
+        self,
+    ) -> None:
+        from gate import RateLimiter, SessionStore
+        from oidc import AuthorizationRequestStore, OIDCConfig, build_oidc_routes
+
+        holder = {"base_url": "https://idp.example.com"}
+        provider_app = _mock_provider_app(_generate_rsa_key(), holder)
+
+        async with TestClient(TestServer(provider_app)) as provider_client:
+            holder["base_url"] = str(provider_client.make_url("")).rstrip("/")
+            config = OIDCConfig(
+                issuer_url=holder["base_url"],
+                client_id=_CLIENT_ID,
+                client_secret="s3cr3t",
+                redirect_uri="https://comfyui.example/curu-auth/oidc/callback",
+            )
+            store = AuthorizationRequestStore(max_size=3)
+            sessions = SessionStore()
+
+            start, _callback = build_oidc_routes(
+                config, sessions=sessions, store=store
+            )
+            node_app = web.Application()
+            node_app.router.add_get(_START_PATH, start)
+
+            async with TestClient(TestServer(node_app)) as node_client:
+                # No rate_limiter here -- isolates the store's own cap
+                # from rate-limiting (a distinct, independent bound).
+                for _ in range(6):
+                    await node_client.get(_START_PATH, allow_redirects=False)
+
+        assert len(store) == 3
