@@ -7,7 +7,17 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     git \
     libgl1 \
     libglib2.0-0 \
+    ca-certificates \
     && rm -rf /var/lib/apt/lists/*
+
+# Trusts the harness's own, repo-committed Authelia CA (spec 002,
+# research.md) at the OS level -- NOT a TLS-verification bypass in
+# oidc.py itself. The exact same discovery/token/JWKS-fetch code that
+# will run against a real, publicly-trusted provider in production runs
+# unmodified here; only the OS trust store differs, and only in this
+# disposable image.
+COPY docker/authelia/ca.crt /usr/local/share/ca-certificates/authelia-local-harness-ca.crt
+RUN update-ca-certificates
 
 # Clone ComfyUI (pinned tag for reproducibility; bump manually) -- same tag
 # already validated by the sibling repo's own harness
@@ -27,6 +37,13 @@ RUN pip install --no-cache-dir \
     --index-url https://download.pytorch.org/whl/cpu && \
     pip install --no-cache-dir -r requirements.txt && \
     pip install --no-cache-dir requests
+
+# joserfc: comfyui_curu_auth's own OIDC ID-token verification dependency
+# (spec 002, research.md) -- not a ComfyUI dependency, so it isn't
+# installed by the requirements.txt step above. aiohttp is already
+# installed by that step (a ComfyUI dependency too), so no separate
+# install is needed for it.
+RUN pip install --no-cache-dir "joserfc>=1.0"
 
 # comfyui_curu_auth is NOT copied or cloned into this image -- unlike
 # curu's own harness (which installs a published release), this harness's

@@ -1,0 +1,11 @@
+# Fixed test user for this local, disposable harness -- meaningless
+# outside it, same precedent as docker-compose.yml's own
+# COMFYUI_CURU_AUTH_TOKEN (spec 001, ADR-001). Password:
+# "local-harness-test-password" (spec 002 research.md).
+users:
+  curu-test-user:
+    disabled: false
+    displayname: "curu Test User"
+    password: "$pbkdf2-sha512$310000$ZvgsUzMBBg3q/zbmKeQ2UQ$eR5BdkcyVh6.8DsTxo8mDHJp9Q9blo7a9nkZRxdAIdYzSkU3tKmfJIfManeM/PioVdKEVT5gqyOKImcpOCryzQ"
+    email: curu-test-user@example.com
+    groups: []

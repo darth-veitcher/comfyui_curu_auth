@@ -121,7 +121,7 @@ changes; US2 verifies nothing changes when they aren't used.
       individual files (a Docker Desktop bind-mount gotcha hit during the
       spike). Spike container and all throwaway files cleaned up
       afterward — nothing from this task persists except these notes.
-- [ ] T010 Extend `docker-compose.yml` with an `authelia` service (Lite
+- [x] T010 Extend `docker-compose.yml` with an `authelia` service (Lite
       bundle — file-based user, SQLite storage, no Postgres/Redis;
       ADR-002) and add `docker/authelia/` with its static configuration: a
       registered confidential OIDC client (matching this feature's
@@ -132,6 +132,29 @@ changes; US2 verifies nothing changes when they aren't used.
       Bullet 1** — adversarial engineering review flagged this as
       repeating spec 001's Docker-iteration-cost underestimate if sized as
       one.
+      **Done (2026-07-24)**: pinned `authelia/authelia:4.39.20` (the
+      spike-validated version); `docker/authelia/{configuration.yml,
+      users_database.yml,ca.crt,ca.key,server.crt,server.key}` committed
+      (fixed, deterministic secrets, meaningless outside this harness —
+      same precedent as `COMFYUI_CURU_AUTH_TOKEN`). `docker/comfyui/
+      Dockerfile` now trusts the committed CA at the OS level (not a
+      TLS-bypass in `oidc.py`) and installs `joserfc`. `docker-compose.yml`
+      gives `authelia` a second network alias, `authelia.internal`
+      (Authelia's own cookie-domain validation rejects a bare `authelia`).
+      comfyui's four `COMFYUI_CURU_AUTH_OIDC_*` env vars default to empty
+      (unconfigured) via `${VAR:-}` substitution, so every existing test
+      and US2's own tests keep working against this same compose file
+      unmodified. Validated the **entire** authorization-code flow
+      end-to-end against this real config (not just the T009 spike's
+      simplified one) — firstfactor → authorization → token exchange,
+      correct `iss`/`aud`/`nonce` — surfacing one more real finding:
+      `aiohttp`'s cookie jar matches against the actual request URL, not
+      a spoofed `Host` header, so the session cookie must be extracted
+      and passed explicitly (research.md). Also fixed a pre-existing
+      spec-001 test (`test_second_up_without_down_is_not_destructive`)
+      that hardcoded "exactly one container" — now checks for no
+      duplicates, since there are legitimately two services now. All 5
+      existing system tests + 51 hermetic tests pass together.
 
 **Checkpoint**: Foundation ready — US1 can now be implemented.
 

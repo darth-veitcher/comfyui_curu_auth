@@ -167,47 +167,105 @@ trusts the OS store, so `oidc.py` needs zero test-only code paths — the
 exact same discovery/token/JWKS-fetch code that will run against a real,
 publicly-trusted provider in production runs unmodified here too.
 
+This covers the **gate's** side (production `oidc.py`, inside the
+`comfyui` container). The **live test's** own host-side process is a
+different matter — it's test code, not production code, and doesn't run
+inside the container whose OS trust store was just updated. It loads the
+same committed CA into a locally-constructed `ssl.SSLContext` (test-only,
+confined to `tests/system/conftest.py` — see the issuer-URL-duality
+decision below for why it also needs a `Host`/SNI override, not just CA
+trust).
+
 **Alternatives considered**: A TLS-verification-bypass flag in `oidc.py`
 (e.g. `verify_ssl=False`) — rejected outright; Constitution Principle I
 (Minimal Attack Surface) does not bend for test convenience, and the
 OS-trust-store approach achieves the same test outcome with zero
 production-code risk.
 
-## Decision: Reconcile the issuer-URL duality — container-internal hostname for the gate, published host port for the test's simulated "browser"
+## Decision: Reconcile the issuer-URL duality — one logical hostname (`authelia.internal`), reached two different physical ways, via `aiohttp`'s own `Host`/SNI override
 
-**Rationale**: Found during adversarial engineering review (2026-07-23) —
-the classic OIDC-in-Docker-Compose footgun. Two different callers reach
-Authelia from two different network vantage points, and conflating them
-is the actual risk, not a detail to gloss over:
+**Rationale**: Found during adversarial engineering review (2026-07-23),
+then investigated further while building T010 — the initial draft of
+this decision (below, superseded) assumed the test client's own address
+never needs to match the gate's, on the theory that Authelia has one
+fixed configured issuer. **That assumption was wrong**, confirmed against
+Authelia's own multi-domain OIDC behavior: the `iss` claim it mints is
+derived *per-request*, from whichever configured `session.cookies[]`
+`domain`/`authelia_url` entry matches the request that drove the
+*front-channel* authorization call — not a single static
+`identity_providers.oidc.issuer` field (no such field exists). Since the
+gate validates the received `iss` against its own configured
+`issuer_url` (FR-007), and that same `issuer_url` string doubles as the
+base URL for the gate's own discovery/token/JWKS fetches
+(data-model.md), both callers must agree on the *exact same hostname* —
+just reached differently, since a container and the host physically
+cannot resolve the same name the same way.
 
-- The **gate** (inside the `comfyui` container) does every OIDC
-  backend-channel call — discovery-document fetch, token exchange, JWKS
-  fetch, and `iss`-claim comparison — against Authelia's
-  container-network hostname, `http://authelia:9091`. Authelia's own
-  `identity_providers.oidc.issuer` config is set to that exact same
-  value, so the `iss` claim it mints always matches what the gate
-  expects, independent of anything the front-channel does.
+**Resolved design**:
+- Authelia's compose service gets a second network alias,
+  `authelia.internal` (`networks.default.aliases`), alongside its default
+  service-name alias `authelia`. Its self-signed cert (CA + leaf,
+  generated once, committed to `docker/authelia/` — meaningless outside
+  this disposable harness, same precedent as the fixed test credential)
+  has `authelia.internal` as its CN/SAN. Authelia's own `session.cookies[]`
+  entry uses `domain: 'authelia.internal'` (has the required dot — a bare
+  `authelia` fails Authelia's own cookie-domain validation, confirmed
+  live during the T009 spike) and `authelia_url:
+  'https://authelia.internal:9091'`.
+- The **gate** (inside the `comfyui` container) is configured with
+  `COMFYUI_CURU_AUTH_OIDC_ISSUER_URL=https://authelia.internal:9091` —
+  reachable directly, since Docker Compose's own DNS resolves that alias
+  for any container on the same network. No special handling needed on
+  this side at all.
 - The **live test's simulated "browser"** (a host-side
-  `aiohttp.ClientSession`, per the headless-login decision above) reaches
-  Authelia's login/authorization endpoints via its **published port on
-  the host**, `http://localhost:9091`. It never validates the `iss`
-  claim itself, so this address never needs to match the gate's.
-- The **redirect_uri** registered with Authelia points at whatever
-  actually completes the front-channel redirect — the host-side test
-  client, so `http://localhost:8188/curu-auth/oidc/callback` (the
-  `comfyui` service's already-published port).
+  `aiohttp.ClientSession`) physically connects to Authelia's **published
+  host port**, `https://127.0.0.1:9091` (the host cannot resolve
+  `authelia.internal` — that alias only exists inside the Compose
+  network) — but sets `headers={"Host": "authelia.internal:9091"}` and
+  `server_hostname="authelia.internal"` on each request. `aiohttp`
+  natively supports overriding both the `Host` header and the TLS SNI/
+  hostname-verification target per-request (confirmed against its
+  `ClientSession.request` signature) — so Authelia sees a request from
+  `authelia.internal` regardless of the actual TCP destination, resolving
+  the *identical* `iss` the gate independently expects. The test process
+  trusts the same committed CA via a custom `ssl.SSLContext` (test-only —
+  see the OS-trust-store decision below for why production `oidc.py`
+  never needs this).
+- The **redirect_uri** registered with Authelia is the `comfyui`
+  service's own published port, `http://127.0.0.1:8188/curu-auth/oidc/callback`
+  — whoever completes the front-channel redirect (the test client) must
+  be able to reach it, and the test runs on the host.
 
-Three addresses for what looks like "the same provider" — reconciled by
-keeping straight which is a backend-channel address (must match `iss`)
-and which are front-channel addresses (never validated, just reachable by
-whoever makes that particular call).
+One logical hostname, two physical paths, reconciled by `aiohttp`'s own
+per-request `Host`/SNI override rather than host-level DNS tricks.
 
-**Alternatives considered**: A single shared hostname for everything
-(e.g. adding a host-side `/etc/hosts` entry so `authelia` resolves from
-the host too) — rejected as an unnecessary environment-specific setup
-step when the two-address reconciliation above needs no host
-configuration at all and generalizes to any developer's machine
-unchanged.
+**One more thing this required, found running it against the real T010
+compose stack (not the T009 spike, which used a matching IP everywhere
+and so never hit this)**: `aiohttp.ClientSession`'s automatic cookie jar
+matches cookies against the *actual request URL* (`127.0.0.1`), not the
+manually-overridden `Host` header — so Authelia's session cookie (set
+with `Domain=authelia.internal`, per its own config) silently never got
+attached to the follow-up authorization request, and Authelia responded
+with a redirect to its own frontend "flow" landing page instead of the
+callback (a soft failure, not an error — easy to mistake for a config
+problem rather than a client-side cookie-jar mismatch). Fix: extract the
+`Set-Cookie` value from the `firstfactor` response explicitly and pass it
+as a literal `Cookie` header on the follow-up request, rather than
+relying on the jar's own domain-matching. Confirmed working end-to-end
+(firstfactor → authorization → token exchange, correct `iss`/`aud`/
+`nonce`) against the actual `docker-compose.yml` + `docker/authelia/`
+config, not just the throwaway spike's simplified one.
+
+**Alternatives considered** (original, now-superseded draft): "the
+front-channel and backend-channel addresses never need to match, since
+Authelia has one fixed issuer" — **wrong**, per the per-request
+domain-matching behavior discovered above; would have produced an `iss`
+mismatch (`https://authelia:9091` from the gate's config vs. whatever the
+front-channel's own connecting address resolved to) that only a live run
+against the real harness would have caught. A host-side `/etc/hosts`
+entry mapping `authelia.internal` → `127.0.0.1` — rejected: requires
+`sudo` and per-machine setup outside the repo, where the `Host`/SNI
+override needs neither.
 
 ## Decision: No JWKS caching — fetch fresh per verification
 
