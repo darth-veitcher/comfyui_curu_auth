@@ -42,7 +42,11 @@ LOGIN_PATH = "/curu-auth/login"
 #: plain HTTP, never cross-site.
 COOKIE_NAME = "curu_auth"
 
-_COOKIE_MAX_AGE_SECONDS = 60 * 60 * 24 * 30  # 30 days
+#: Public (not `_`-prefixed) because oidc.py's callback handler mints a
+#: session cookie through this exact same mechanism (ADR-002) and needs
+#: the identical max_age -- a second real consumer, same reasoning as
+#: `client_key`'s own promotion.
+COOKIE_MAX_AGE_SECONDS = 60 * 60 * 24 * 30  # 30 days
 
 
 def generate_credential() -> str:
@@ -81,6 +85,7 @@ def build_gate_middleware(
     *,
     sessions: SessionStore | None = None,
     rate_limiter: RateLimiter | None = None,
+    public_paths: frozenset[str] | set[str] | None = None,
 ) -> Middleware:
     """Return an aiohttp ``@web.middleware`` function that rejects any
     request lacking ``credential`` -- as ``Authorization: Bearer
@@ -91,8 +96,19 @@ def build_gate_middleware(
     route on the app it's installed into, including a websocket route's
     own initial handshake, verified directly against ComfyUI's own
     ``server.py`` (every route it registers shares one ``app``/``routes``
-    object). ``LOGIN_PATH`` itself is always let through unauthenticated
-    -- see its own docstring for why.
+    object).
+
+    ``public_paths`` (default ``None``, treated as ``{LOGIN_PATH}``) is
+    the small, explicit set of routes let through unauthenticated --
+    every one of them reachable pre-session by definition, the same
+    chicken-and-egg reason ``LOGIN_PATH`` itself always has been (see its
+    own docstring). A second additive auth method (e.g. an OIDC
+    start/callback pair) registers its own pre-session routes by
+    supplying a wider set here, rather than a second special-cased path
+    check -- ADR-003. Deliberately an explicit set, not a prefix rule:
+    anyone widening it is making a conscious, reviewable edit, not
+    relying on a pattern-match that could silently exempt an unrelated
+    future route from Total Route Coverage.
 
     ``sessions=None`` (the default) disables cookie auth entirely --
     every pre-browser-login caller/test of this function keeps its exact
@@ -126,10 +142,11 @@ def build_gate_middleware(
     """
 
     expected_header = f"Bearer {credential}".encode("latin-1")
+    resolved_public_paths = public_paths if public_paths is not None else {LOGIN_PATH}
 
     @web.middleware
     async def gate(request: web.Request, handler: Handler) -> web.StreamResponse:
-        if request.path == LOGIN_PATH:
+        if request.path in resolved_public_paths:
             return await handler(request)
 
         if sessions is not None:
@@ -137,10 +154,10 @@ def build_gate_middleware(
             if supplied_cookie and sessions.is_valid(supplied_cookie):
                 return await handler(request)
 
-        client_key = _client_key(request)
+        key = client_key(request)
 
         if rate_limiter is not None:
-            retry_after = rate_limiter.seconds_until_retry(client_key)
+            retry_after = rate_limiter.seconds_until_retry(key)
             if retry_after > 0:
                 seconds = int(retry_after) + 1
                 if "text/html" in request.headers.get("Accept", ""):
@@ -158,15 +175,15 @@ def build_gate_middleware(
         supplied_header = request.headers.get("Authorization", "").encode("latin-1")
         if secrets.compare_digest(supplied_header, expected_header):
             if rate_limiter is not None:
-                rate_limiter.record_success(client_key)
+                rate_limiter.record_success(key)
             return await handler(request)
 
         if rate_limiter is not None:
-            rate_limiter.record_failure(client_key)
+            rate_limiter.record_failure(key)
 
         _logger.warning(
             "comfyui_curu_auth: authentication failure from %s (%s %s)",
-            client_key,
+            key,
             request.method,
             request.path,
         )
@@ -404,6 +421,7 @@ _LOGIN_PAGE_TEMPLATE = """\
            autocomplete="current-password" autofocus>
     <button type="submit">Log in</button>
   </form>
+  {oidc_login_option}
 </main>
 <script>
 (function () {{
@@ -434,23 +452,43 @@ _LOGIN_PAGE_TEMPLATE = """\
 """
 
 
-def _render_login_page(*, message: str = "", retry_after: int | None = None) -> str:
+def _render_login_page(
+    *,
+    message: str = "",
+    retry_after: int | None = None,
+    oidc_start_path: str | None = None,
+) -> str:
     """``retry_after``, when given, renders a live countdown (an
     ``id="curu-auth-countdown"`` span the page's own script decrements
     once a second) instead of a static "Try again in Ns" that would
     otherwise sit on screen unchanged long after the block has actually
     expired -- a human has no way to tell it's expired without
-    submitting again."""
+    submitting again.
+
+    ``oidc_start_path``, when given, adds a second login option linking
+    to it -- gate.py has no OIDC-specific knowledge of its own (that
+    lives entirely in oidc.py); this is the one generic hook
+    ``build_login_routes`` uses to surface it, kept additive so a caller
+    that never passes it (every existing caller/test) renders byte-for-
+    byte the same page as before (FR-002/FR-004).
+    """
 
     if retry_after is not None:
         message = (
             "<p>Too many attempts. Try again in "
             f'<span id="curu-auth-countdown">{retry_after}</span>s.</p>'
         )
-    return _LOGIN_PAGE_TEMPLATE.format(message=message, login_path=LOGIN_PATH)
+    oidc_login_option = ""
+    if oidc_start_path:
+        oidc_login_option = (
+            f'<p><a href="{oidc_start_path}">Log in with your identity provider</a></p>'
+        )
+    return _LOGIN_PAGE_TEMPLATE.format(
+        message=message, login_path=LOGIN_PATH, oidc_login_option=oidc_login_option
+    )
 
 
-def _client_key(request: web.Request) -> str:
+def client_key(request: web.Request) -> str:
     """The identity :class:`RateLimiter` keys backoff on for one request.
 
     Prefers ``X-Forwarded-For``'s first (left-most, closest-to-client)
@@ -484,6 +522,7 @@ def build_login_routes(
     *,
     sessions: SessionStore,
     rate_limiter: RateLimiter | None = None,
+    oidc_start_path: str | None = None,
 ) -> tuple[Handler, Handler]:
     """Return ``(login_get, login_post)`` handlers for :data:`LOGIN_PATH` --
     a minimal HTML form letting a human paste the same credential
@@ -500,17 +539,25 @@ def build_login_routes(
     ``rate_limiter`` defaults to a fresh :class:`RateLimiter` (module-level
     default parameters) when omitted -- pass one explicitly to share state
     across calls, or to tune the backoff.
+
+    ``oidc_start_path``, when given, adds a second login option to every
+    rendered state of this page -- see :func:`_render_login_page`'s own
+    docstring. ``None`` (the default) renders exactly as before this
+    parameter existed (FR-002/FR-004).
     """
 
     limiter = rate_limiter if rate_limiter is not None else RateLimiter()
     expected = credential.encode("latin-1")
 
     async def login_get(request: web.Request) -> web.Response:
-        return web.Response(text=_render_login_page(), content_type="text/html")
+        return web.Response(
+            text=_render_login_page(oidc_start_path=oidc_start_path),
+            content_type="text/html",
+        )
 
     async def login_post(request: web.Request) -> web.StreamResponse:
-        client_key = _client_key(request)
-        retry_after = limiter.seconds_until_retry(client_key)
+        key = client_key(request)
+        retry_after = limiter.seconds_until_retry(key)
         if retry_after > 0:
             # The styled login page, not a bare JSON body: this route is
             # only ever reached by a real browser form submission (no
@@ -518,7 +565,9 @@ def build_login_routes(
             # human should see the same page, not an unstyled API error.
             seconds = int(retry_after) + 1
             return web.Response(
-                text=_render_login_page(retry_after=seconds),
+                text=_render_login_page(
+                    retry_after=seconds, oidc_start_path=oidc_start_path
+                ),
                 content_type="text/html",
                 status=429,
                 headers={"Retry-After": str(seconds)},
@@ -527,24 +576,27 @@ def build_login_routes(
         data = await request.post()
         supplied = str(data.get("token", "")).encode("latin-1", errors="ignore")
         if not supplied or not secrets.compare_digest(supplied, expected):
-            limiter.record_failure(client_key)
+            limiter.record_failure(key)
             _logger.warning(
                 "comfyui_curu_auth: authentication failure from %s (login form)",
-                client_key,
+                key,
             )
             return web.Response(
-                text=_render_login_page(message="<p>Incorrect credential.</p>"),
+                text=_render_login_page(
+                    message="<p>Incorrect credential.</p>",
+                    oidc_start_path=oidc_start_path,
+                ),
                 content_type="text/html",
                 status=401,
             )
 
-        limiter.record_success(client_key)
+        limiter.record_success(key)
         session_token = sessions.issue()
         redirect = web.HTTPFound("/")
         redirect.set_cookie(
             COOKIE_NAME,
             session_token,
-            max_age=_COOKIE_MAX_AGE_SECONDS,
+            max_age=COOKIE_MAX_AGE_SECONDS,
             httponly=True,
             secure=True,
             samesite="Strict",
@@ -558,11 +610,13 @@ def build_login_routes(
 
 
 __all__ = [
+    "COOKIE_MAX_AGE_SECONDS",
     "COOKIE_NAME",
     "LOGIN_PATH",
     "RateLimiter",
     "SessionStore",
     "build_gate_middleware",
     "build_login_routes",
+    "client_key",
     "generate_credential",
 ]

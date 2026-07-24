@@ -3,3 +3,8 @@ __pycache__/
 .pytest_cache/
 .ruff_cache/
 .venv/
+
+# Authelia's own runtime state (docker/authelia/ is bind-mounted as its
+# /config) -- generated fresh on each `docker compose up`, not source.
+docker/authelia/db.sqlite3
+docker/authelia/notification.txt

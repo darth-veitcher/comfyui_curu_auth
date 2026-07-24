@@ -13,6 +13,18 @@ services:
       # and gets comfyui_curu_auth's own default: a fresh random credential
       # per restart (resolve_credential's own docstring).
       - COMFYUI_CURU_AUTH_TOKEN=local-harness-test-credential
+      # Unset by default (empty string -> resolve_oidc_config treats a
+      # blank value as absent, same as COMFYUI_CURU_AUTH_TOKEN's own
+      # handling -- FR-009), so every existing test and every US2
+      # (default-path-unaffected) test keeps working against this same
+      # compose file unmodified. OIDC-specific live tests (T028, T038)
+      # set these four in the shell environment before their own
+      # `compose("up", "-d")` call -- see tests/system/conftest.py and
+      # specs/002-oidc-login/research.md.
+      - COMFYUI_CURU_AUTH_OIDC_ISSUER_URL=${COMFYUI_CURU_AUTH_OIDC_ISSUER_URL:-}
+      - COMFYUI_CURU_AUTH_OIDC_CLIENT_ID=${COMFYUI_CURU_AUTH_OIDC_CLIENT_ID:-}
+      - COMFYUI_CURU_AUTH_OIDC_CLIENT_SECRET=${COMFYUI_CURU_AUTH_OIDC_CLIENT_SECRET:-}
+      - COMFYUI_CURU_AUTH_OIDC_REDIRECT_URI=${COMFYUI_CURU_AUTH_OIDC_REDIRECT_URI:-}
     volumes:
       # Bind-mounts this repo's own working tree -- not a build-time COPY
       # or a git clone of a published release (contrast with
@@ -30,3 +42,40 @@ services:
       timeout: 5s
       retries: 12
       start_period: 60s
+    depends_on:
+      authelia:
+        condition: service_healthy
+
+  authelia:
+    # Pinned to the exact version the T009 spike validated live --
+    # reproducibility, same reasoning as the comfyui service's own
+    # COMFYUI_VERSION pin (ADR-001).
+    image: authelia/authelia:4.39.20
+    networks:
+      default:
+        # The gate (inside comfyui) reaches Authelia via this alias --
+        # its own issuer_url config and Authelia's own cookie-domain/
+        # authelia_url config both use it, since Authelia's `iss` claim
+        # is derived per-request from whichever configured domain
+        # matches the request that drove the authorization call
+        # (research.md's issuer-URL-duality decision). The default
+        # `authelia` service-name alias also still resolves, but isn't
+        # used for anything OIDC-specific -- Authelia's own cookie-domain
+        # validation requires a dot or an IP, which the bare service name
+        # doesn't have.
+        aliases:
+          - authelia.internal
+    volumes:
+      # Directory mount, not individual files -- a Docker Desktop
+      # bind-mount gotcha hit during the T009 spike (research.md):
+      # single-file mounts onto paths that don't pre-exist in the base
+      # image can silently become directories.
+      - ./docker/authelia:/config
+    ports:
+      - "9091:9091"
+    healthcheck:
+      test: ["CMD", "wget", "--no-check-certificate", "-q", "-O", "/dev/null", "https://localhost:9091/api/health"]
+      interval: 5s
+      timeout: 5s
+      retries: 12
+      start_period: 20s

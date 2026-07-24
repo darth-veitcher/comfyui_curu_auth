@@ -27,8 +27,8 @@ gantt
 | Epic | Title | Status | Specs | Fidelity |
 |---|---|---|---|---|
 | [browser-e2e](project-management/Roadmap/epics/browser-e2e.md) | Browser-driven E2E harness (Playwright + virtual authenticator) | Planning | — | S? A+ T:- |
-| [oidc-auth](project-management/Roadmap/epics/oidc-auth.md) | Optional OIDC/OAuth login path | Planning | — | S? A+ T:- |
-| [passkey-auth](project-management/Roadmap/epics/passkey-auth.md) | Passwordless WebAuthn/passkey login | Planning | — | S? A? T:- |
+| [oidc-auth](project-management/Roadmap/epics/oidc-auth.md) | Optional OIDC/OAuth login path | Planning | 0/1 shipped | S+ A+ T:- |
+| [passkey-auth](project-management/Roadmap/epics/passkey-auth.md) | Passwordless WebAuthn/passkey login | Planning | — | S? A+ T:- |
 | [local-test-harness](project-management/Roadmap/epics/archive/local-test-harness.md) | CPU-only Docker integration harness for ComfyUI + this node | Done | 1/1 shipped | S+ A+ T:100% |
 
 _Fidelity: `S+/S?` = has specs / none · `A+/A?` = has ADRs / none · `T:N%` = task completion_
@@ -43,3 +43,4 @@ _No active bullets._
 |---|---|---|
 | [ADR-001](../../ADRs/ADR-001-docker-comfyui-test-harness.md) | Docker-based local ComfyUI test harness, adapted from curu's own | Unknown |
 | [ADR-002](../../ADRs/ADR-002-oidc-session-sharing-and-test-idp.md) | OIDC shares the existing session mechanism; Authelia (Lite) as the local test IdP | Unknown |
+| [ADR-003](../../ADRs/ADR-003-gate-public-paths-generalization.md) | Generalize `gate.py`'s single-path bypass into a "public paths" set | Unknown |

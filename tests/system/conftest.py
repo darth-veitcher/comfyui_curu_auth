@@ -11,10 +11,13 @@ harness from tests" decision).
 from __future__ import annotations
 
 import asyncio
+import os
 import socket
+import ssl
 import subprocess
 import time
 from pathlib import Path
+from urllib.parse import urlsplit, urlunsplit
 
 import aiohttp
 import pytest
@@ -30,18 +33,116 @@ COMFYUI_PORT = 8188
 TEST_AUTH_TOKEN = "local-harness-test-credential"
 AUTH_HEADERS = {"Authorization": f"Bearer {TEST_AUTH_TOKEN}"}
 
+# --------------------------------------------------------------------------
+# OIDC/Authelia (spec 002) -- all fixed, repo-committed values, meaningless
+# outside this disposable harness. See docker/authelia/configuration.yml
+# and specs/002-oidc-login/research.md's issuer-URL-duality decision for
+# why "authelia.internal" (not the bare service name, not an IP) is used
+# throughout, and why the host-side test process needs a Host/SNI override
+# rather than DNS to reach it.
+# --------------------------------------------------------------------------
+
+AUTHELIA_PUBLISHED_URL = "https://127.0.0.1:9091"
+AUTHELIA_HOST_HEADER = "authelia.internal:9091"
+AUTHELIA_CA_PATH = REPO_ROOT / "docker" / "authelia" / "ca.crt"
+OIDC_TEST_USER = "curu-test-user"
+OIDC_TEST_PASSWORD = "local-harness-test-password"
+OIDC_CLIENT_ID = "comfyui-curu-auth"
+OIDC_CLIENT_SECRET = "local-harness-oidc-client-secret"
+#: MUST exactly match docker/authelia/configuration.yml's registered
+#: client redirect_uris -- Authelia rejects a mismatch (standard OIDC
+#: security check). 127.0.0.1, not localhost -- matching the client
+#: registration exactly, not just "close enough".
+OIDC_REDIRECT_URI = "http://127.0.0.1:8188/curu-auth/oidc/callback"
+OIDC_ISSUER_URL = "https://authelia.internal:9091"
+
+#: Passed as `env=` to `compose("up", "-d", env=OIDC_ENV)` -- the four
+#: variables docker-compose.yml's comfyui service reads via `${VAR:-}`
+#: substitution. Every other test in this package omits `env=` entirely,
+#: leaving OIDC unconfigured (US2's own concern).
+OIDC_ENV = {
+    "COMFYUI_CURU_AUTH_OIDC_ISSUER_URL": OIDC_ISSUER_URL,
+    "COMFYUI_CURU_AUTH_OIDC_CLIENT_ID": OIDC_CLIENT_ID,
+    "COMFYUI_CURU_AUTH_OIDC_CLIENT_SECRET": OIDC_CLIENT_SECRET,
+    "COMFYUI_CURU_AUTH_OIDC_REDIRECT_URI": OIDC_REDIRECT_URI,
+}
+
+
+def authelia_ssl_context() -> ssl.SSLContext:
+    """Trusts the same repo-committed CA `docker/comfyui/Dockerfile`
+    installs into the gate's own OS trust store (research.md) -- test-only,
+    confined to this module; production `oidc.py` code has no equivalent
+    (and needs none, since it runs inside the container where that OS
+    trust store already applies)."""
+
+    return ssl.create_default_context(cafile=str(AUTHELIA_CA_PATH))
+
+
+def rewrite_to_published_authelia_host(url: str) -> str:
+    """Swap ``url``'s host:port to Authelia's published host address
+    (127.0.0.1:9091) -- the host-side test process can't resolve
+    `authelia.internal` (that alias only exists inside the Compose
+    network), so any URL Authelia itself returns (e.g. an authorization
+    redirect `Location`) needs its netloc rewritten before this process
+    can physically connect to it. Pair with the `Host`/`server_hostname`
+    overrides (`AUTHELIA_HOST_HEADER`, `authelia_ssl_context`) so Authelia
+    still sees a request from `authelia.internal` regardless of the
+    actual TCP destination.
+    """
+
+    parsed = urlsplit(url)
+    return urlunsplit(parsed._replace(netloc="127.0.0.1:9091"))
+
+
+async def authelia_firstfactor_login(session: aiohttp.ClientSession) -> str:
+    """Complete Authelia's headless first-factor login (the T009 spike's
+    proven sequence) and return the resulting session cookie's raw
+    ``name=value`` string, ready to use as a literal ``Cookie`` header on
+    a follow-up request -- NOT relying on `aiohttp`'s own cookie jar,
+    which matches against the actual request URL, not the `Host` override
+    used here (discovered live building T010; research.md).
+    """
+
+    async with session.post(
+        f"{AUTHELIA_PUBLISHED_URL}/api/firstfactor",
+        json={
+            "username": OIDC_TEST_USER,
+            "password": OIDC_TEST_PASSWORD,
+            "keepMeLoggedIn": False,
+        },
+        headers={"Host": AUTHELIA_HOST_HEADER},
+        server_hostname="authelia.internal",
+        ssl=authelia_ssl_context(),
+    ) as response:
+        response.raise_for_status()
+        set_cookie = response.headers.getall("Set-Cookie", [])
+    return next(
+        c.split(";")[0] for c in set_cookie if c.startswith("authelia_session=")
+    )
+
 
 def compose(
-    *args: str, timeout: float | None = None
+    *args: str,
+    timeout: float | None = None,
+    env: dict[str, str] | None = None,
 ) -> subprocess.CompletedProcess[str]:
-    """Run `docker compose <args>` from the repo root, capturing output."""
+    """Run `docker compose <args>` from the repo root, capturing output.
 
+    ``env``, when given, is merged over the current process environment --
+    used by OIDC-specific tests (spec 002) to set the four
+    ``COMFYUI_CURU_AUTH_OIDC_*`` variables `docker-compose.yml` reads via
+    ``${VAR:-}`` substitution, without touching the default (unset,
+    unconfigured) behavior every other test in this package relies on.
+    """
+
+    merged_env = {**os.environ, **env} if env else None
     return subprocess.run(
         ["docker", "compose", *args],
         cwd=REPO_ROOT,
         capture_output=True,
         text=True,
         timeout=timeout,
+        env=merged_env,
     )
 
 

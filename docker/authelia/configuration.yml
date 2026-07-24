@@ -1,0 +1,112 @@
+# Authelia (Lite bundle: file-based users, SQLite storage, no Postgres/
+# Redis) -- the local test IdP for the oidc-auth epic's live verification,
+# per ADR-002. Every secret below is fixed and committed, meaningless
+# outside this disposable harness -- same precedent as docker-compose.yml's
+# own COMFYUI_CURU_AUTH_TOKEN (ADR-001). See specs/002-oidc-login/research.md
+# for why `authelia.internal` (not the bare `authelia` service name, and not
+# an IP) is the hostname used throughout: Authelia's own cookie-domain
+# validation requires a dot or an IP, and its `iss` claim is derived
+# per-request from whichever configured domain matches the request that
+# drove the authorization call -- both the gate (container-side) and the
+# live test (host-side, via a Host/SNI override) must resolve to the exact
+# same value.
+
+server:
+  address: 'tcp://:9091'
+  tls:
+    certificate: '/config/server.crt'
+    key: '/config/server.key'
+
+log:
+  level: 'info'
+
+identity_validation:
+  reset_password:
+    # Reset-password flow is never exercised by this harness -- fixed
+    # value only because Authelia requires one to start.
+    jwt_secret: '030f793140ca4441aa4428804da7ae1a96645cd8ae19935c071f93d527098f6b'
+
+authentication_backend:
+  file:
+    path: '/config/users_database.yml'
+
+access_control:
+  default_policy: 'one_factor'
+
+session:
+  secret: 'dd8c12226951fec08ce25ed944e31470eb26e596540e2348dac5ae6a8f52b445'
+  cookies:
+    - domain: 'authelia.internal'
+      authelia_url: 'https://authelia.internal:9091'
+
+storage:
+  local:
+    path: '/config/db.sqlite3'
+  encryption_key: '1690ef0e0e2b8a0f68cca5887a1f0fed'
+
+notifier:
+  filesystem:
+    filename: '/config/notification.txt'
+
+identity_providers:
+  oidc:
+    hmac_secret: '1a6844f23b55bcf7e0f62fa19ce86c715256df1b80c58998cf0e3013a9483338'
+    jwks:
+      - key_id: 'local-harness'
+        algorithm: 'RS256'
+        use: 'sig'
+        key: |
+          -----BEGIN PRIVATE KEY-----
+          MIIEvAIBADANBgkqhkiG9w0BAQEFAASCBKYwggSiAgEAAoIBAQCSI561d1V3rYYh
+          idTkfFakIaK+TPrOoqqTski3eFktoG9X2Ir1ANTDIX+DYOTB9xjit95WSDrxlnYm
+          zPNCSqd7ZWLC/jvg97WscmTRzti2ZCxafEd3rbu0hB6jGjrr4fOr6J360Mu0rMr9
+          SnrTpJRFOjlhreWNNajZVpRqHLrj7qWjnMD/UtDafs2x+i56udr7Law8891Tg9RV
+          VRLD6ipQy/ozx+tbx7ci8xl/q+0aGlhCIjz/EGPadSlZ+Y6SJ9uNf5N7xgftPphx
+          ZGV6aENZiqhSxZDr7Rgw/zAhr/E+A1AhcEuZ7iCTVHjNXo2/iG8KOX2g4zHSzsZL
+          Rj9tF8Z1AgMBAAECggEAFi9cH5Y/Hkz0aNEAxbLugDou946+IHJnTMaq7VdSym9p
+          l79i0PDQW9MRBYPHFn8JgxmAoj6S3CwIQbmpUC3/IOdyR8HKm0tfhA9VqNgq4/1v
+          Ekl9m/h+31eTQxVvTnHdyQImQXZDBmmY4zzUSp7Yd23wWhjJGVfFC0FuhHFaGdHc
+          9TFozQely5wSdH459U6Rt/aA94kUTGXWzaTPAY3WIbRLHffnI88/HqDOtznycGVg
+          uvN4/8l0ot+Kj2a1ohEcI5JBJ1k8E3n5U49X1CS9wtgPvTdr2xi12qdi5pLOBHiJ
+          aFh/sMzbOjzzJQWc6riABxTNTm+HCNv0iSkdESEYPQKBgQDNM7TFk3tP4sdpbZvL
+          q/W9xwEZtH+fyHeNJw5g4DRydoGzL6Tnx6GDucU8QJPDTVNmt06W36aZz14e/GTK
+          SgCGaV4dAnV8SIMuC6ef/bq2CXij9XH1U3Bm9RCzz85cQ/pI0YHswVa//iAzNKWN
+          X9zrB6rezZl2KV04gabTiyJoHwKBgQC2UOqUxKD1RCQ7rKPMFg3BlkF+YmwP6M8c
+          GCGtOQnkowjFMgPZxdodiuORwArRP/sFMUbf6Irk+beD2Bs2Jfak0C9xIcrwIaFU
+          R9IKiYDOzzaDwLJL/uH/WEFnMg8pl9s66AflGpqECbyCRYOcWQvcH96Or402xp9/
+          6lyknR+O6wKBgFFa4Z2/lhEbCRJ8eVsrhxdBkeceD8dKlFNrG6E+4qxK3assBYY7
+          OIbgHRmBRNQWkS1VGZxpeUTb2SYRzOgCpOilV8HKmse2fAPCbSfaUa8gXCstAYxR
+          E2xOVtvjVJ5x+QXrwkYadQlTeHK0ubouOokYFh+VhfU5+xKPHJQcQnzjAoGAOlJ2
+          SHMCXpOW17Qpje78JZKQjwKjOQ+ruXwKweQ+QvLYqmSOkMrXNJ4qoISDsV67SXTz
+          DEvSqt8rkrS+N7s7RIwIsTMzPVA00MZM7ewA1ae587ngD6mQ2GN+QKnl6dNXYWe6
+          ptK03UpUEIR2Try5q4hSZOjJzt0JRx1M16gf4VMCgYApP5S32aHYMRDXziMTTaDA
+          qLJBFYIXsvQraDUvf4oPGpa0b0Cne0vRJDFjB/2DSSl77STSME6DQtdb8L34qfT2
+          d4DCo0Vw5/+A0WkG55Cfn3qjSZVG0UF28luEvlq95jhTCbnnKCxQIO2E+ganBIwd
+          sHb5AZgJbGktQ2vBeFeF4Q==
+          -----END PRIVATE KEY-----
+    clients:
+      - client_id: 'comfyui-curu-auth'
+        client_name: 'comfyui_curu_auth local test harness'
+        # Fixed, committed secret -- meaningless outside this harness.
+        # Plaintext value: 'local-harness-oidc-client-secret'
+        # (specs/002-oidc-login/research.md).
+        client_secret: '$pbkdf2-sha512$310000$M41rYFdleyS2gbdaZNMVUw$vPW4PyjlYQcuFF9s6iGev2npI2nEbd/xjYWv2JGMHLQkZduCcGkYVv.vuZOOfURPn6Wzws/rDHwUl6liEnb3vg'
+        public: false
+        redirect_uris:
+          - 'http://127.0.0.1:8188/curu-auth/oidc/callback'
+        grant_types:
+          - 'authorization_code'
+        response_types:
+          - 'code'
+        scopes:
+          - 'openid'
+          - 'profile'
+          - 'email'
+        token_endpoint_auth_method: 'client_secret_post'
+        authorization_policy: 'one_factor'
+        # Skips the interactive consent screen entirely -- required for
+        # the headless login flow tests/system/'s live suite drives
+        # (T009 spike; research.md's headless-login decision). Acceptable
+        # here specifically because this client only ever exists inside
+        # this disposable, single-purpose test harness.
+        consent_mode: 'implicit'
