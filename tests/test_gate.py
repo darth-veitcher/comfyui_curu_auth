@@ -379,6 +379,7 @@ def _app_with_login(
     credential: str,
     rate_limiter: RateLimiter | None = None,
     sessions: SessionStore | None = None,
+    oidc_start_path: str | None = None,
 ):
     sessions = sessions if sessions is not None else SessionStore()
     app = web.Application(
@@ -386,7 +387,10 @@ def _app_with_login(
     )
     app.router.add_get("/anything", _ok_handler)
     login_get, login_post = build_login_routes(
-        credential, sessions=sessions, rate_limiter=rate_limiter
+        credential,
+        sessions=sessions,
+        rate_limiter=rate_limiter,
+        oidc_start_path=oidc_start_path,
     )
     app.router.add_get(LOGIN_PATH, login_get)
     app.router.add_post(LOGIN_PATH, login_post)
@@ -428,6 +432,33 @@ class TestLoginPathIsAlwaysReachable:
             "username field must precede the password field for browser "
             "autofill heuristics to pair them"
         )
+
+
+class TestOidcLoginOptionOnLoginPage:
+    """`build_login_routes`'s `oidc_start_path` parameter -- gate.py's one
+    generic hook for a second, additive login option (spec 002). Additive
+    only: omitting it (every pre-existing caller/test) MUST render
+    byte-for-byte the same page as before this parameter existed
+    (FR-002/FR-004)."""
+
+    async def test_oidc_option_renders_when_a_start_path_is_given(self) -> None:
+        app = _app_with_login("expected-token", oidc_start_path="/curu-auth/oidc/start")
+
+        async with TestClient(TestServer(app)) as client:
+            response = await client.get(LOGIN_PATH)
+            body = await response.text()
+
+        assert 'href="/curu-auth/oidc/start"' in body
+
+    async def test_oidc_option_absent_when_no_start_path_is_given(self) -> None:
+        app = _app_with_login("expected-token")
+
+        async with TestClient(TestServer(app)) as client:
+            response = await client.get(LOGIN_PATH)
+            body = await response.text()
+
+        assert "identity provider" not in body
+        assert "oidc" not in body.lower()
 
 
 class TestLoginSubmission:

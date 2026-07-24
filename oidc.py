@@ -30,7 +30,23 @@ from joserfc import errors as jose_errors
 from joserfc import jwt
 from joserfc.jwk import KeySet
 
-from gate import COOKIE_MAX_AGE_SECONDS, COOKIE_NAME, SessionStore
+try:
+    # Real ComfyUI context: this module is loaded as <package>.oidc, with
+    # a real package identity ComfyUI's custom-node loader gives it --
+    # same reasoning as __init__.py's own `.gate` import. `ty check`, run
+    # standalone with no such loader present, cannot model that synthetic
+    # package context and would otherwise misreport this as unresolved.
+    from .gate import (  # ty: ignore[unresolved-import]
+        COOKIE_MAX_AGE_SECONDS,
+        COOKIE_NAME,
+        SessionStore,
+    )
+except ImportError:
+    # Hermetic test context: tests/test_oidc.py imports this module bare
+    # (pyproject.toml's pythonpath = ["."] puts the repo root, and
+    # therefore gate.py, directly on sys.path) -- no parent package
+    # exists for a relative import to resolve against.
+    from gate import COOKIE_MAX_AGE_SECONDS, COOKIE_NAME, SessionStore
 
 
 class OIDCDiscoveryError(Exception):

@@ -421,6 +421,7 @@ _LOGIN_PAGE_TEMPLATE = """\
            autocomplete="current-password" autofocus>
     <button type="submit">Log in</button>
   </form>
+  {oidc_login_option}
 </main>
 <script>
 (function () {{
@@ -451,20 +452,40 @@ _LOGIN_PAGE_TEMPLATE = """\
 """
 
 
-def _render_login_page(*, message: str = "", retry_after: int | None = None) -> str:
+def _render_login_page(
+    *,
+    message: str = "",
+    retry_after: int | None = None,
+    oidc_start_path: str | None = None,
+) -> str:
     """``retry_after``, when given, renders a live countdown (an
     ``id="curu-auth-countdown"`` span the page's own script decrements
     once a second) instead of a static "Try again in Ns" that would
     otherwise sit on screen unchanged long after the block has actually
     expired -- a human has no way to tell it's expired without
-    submitting again."""
+    submitting again.
+
+    ``oidc_start_path``, when given, adds a second login option linking
+    to it -- gate.py has no OIDC-specific knowledge of its own (that
+    lives entirely in oidc.py); this is the one generic hook
+    ``build_login_routes`` uses to surface it, kept additive so a caller
+    that never passes it (every existing caller/test) renders byte-for-
+    byte the same page as before (FR-002/FR-004).
+    """
 
     if retry_after is not None:
         message = (
             "<p>Too many attempts. Try again in "
             f'<span id="curu-auth-countdown">{retry_after}</span>s.</p>'
         )
-    return _LOGIN_PAGE_TEMPLATE.format(message=message, login_path=LOGIN_PATH)
+    oidc_login_option = ""
+    if oidc_start_path:
+        oidc_login_option = (
+            f'<p><a href="{oidc_start_path}">Log in with your identity provider</a></p>'
+        )
+    return _LOGIN_PAGE_TEMPLATE.format(
+        message=message, login_path=LOGIN_PATH, oidc_login_option=oidc_login_option
+    )
 
 
 def client_key(request: web.Request) -> str:
@@ -501,6 +522,7 @@ def build_login_routes(
     *,
     sessions: SessionStore,
     rate_limiter: RateLimiter | None = None,
+    oidc_start_path: str | None = None,
 ) -> tuple[Handler, Handler]:
     """Return ``(login_get, login_post)`` handlers for :data:`LOGIN_PATH` --
     a minimal HTML form letting a human paste the same credential
@@ -517,13 +539,21 @@ def build_login_routes(
     ``rate_limiter`` defaults to a fresh :class:`RateLimiter` (module-level
     default parameters) when omitted -- pass one explicitly to share state
     across calls, or to tune the backoff.
+
+    ``oidc_start_path``, when given, adds a second login option to every
+    rendered state of this page -- see :func:`_render_login_page`'s own
+    docstring. ``None`` (the default) renders exactly as before this
+    parameter existed (FR-002/FR-004).
     """
 
     limiter = rate_limiter if rate_limiter is not None else RateLimiter()
     expected = credential.encode("latin-1")
 
     async def login_get(request: web.Request) -> web.Response:
-        return web.Response(text=_render_login_page(), content_type="text/html")
+        return web.Response(
+            text=_render_login_page(oidc_start_path=oidc_start_path),
+            content_type="text/html",
+        )
 
     async def login_post(request: web.Request) -> web.StreamResponse:
         key = client_key(request)
@@ -535,7 +565,9 @@ def build_login_routes(
             # human should see the same page, not an unstyled API error.
             seconds = int(retry_after) + 1
             return web.Response(
-                text=_render_login_page(retry_after=seconds),
+                text=_render_login_page(
+                    retry_after=seconds, oidc_start_path=oidc_start_path
+                ),
                 content_type="text/html",
                 status=429,
                 headers={"Retry-After": str(seconds)},
@@ -550,7 +582,10 @@ def build_login_routes(
                 key,
             )
             return web.Response(
-                text=_render_login_page(message="<p>Incorrect credential.</p>"),
+                text=_render_login_page(
+                    message="<p>Incorrect credential.</p>",
+                    oidc_start_path=oidc_start_path,
+                ),
                 content_type="text/html",
                 status=401,
             )
