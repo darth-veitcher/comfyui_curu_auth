@@ -681,9 +681,7 @@ class TestOidcCallbackHandler:
             in_flight = store.create()
             holder["nonce"] = in_flight.nonce
 
-            _start, callback = build_oidc_routes(
-                config, sessions=sessions, store=store
-            )
+            _start, callback = build_oidc_routes(config, sessions=sessions, store=store)
             node_app = web.Application()
             node_app.router.add_get(_CALLBACK_PATH, callback)
 
@@ -723,9 +721,7 @@ class TestOidcCallbackHandler:
             sessions = SessionStore()
             store.create()  # a real in-flight request exists, but...
 
-            _start, callback = build_oidc_routes(
-                config, sessions=sessions, store=store
-            )
+            _start, callback = build_oidc_routes(config, sessions=sessions, store=store)
             node_app = web.Application()
             node_app.router.add_get(_CALLBACK_PATH, callback)
 
@@ -793,9 +789,7 @@ class TestOidcCallbackHandler:
             in_flight = store.create()
             holder["nonce"] = in_flight.nonce
 
-            _start, callback = build_oidc_routes(
-                config, sessions=sessions, store=store
-            )
+            _start, callback = build_oidc_routes(config, sessions=sessions, store=store)
             node_app = web.Application()
             node_app.router.add_get(_CALLBACK_PATH, callback)
 

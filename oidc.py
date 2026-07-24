@@ -24,9 +24,13 @@ from typing import Any
 from urllib.parse import urlencode
 
 import aiohttp
+from aiohttp import web
+from aiohttp.typedefs import Handler
 from joserfc import errors as jose_errors
 from joserfc import jwt
 from joserfc.jwk import KeySet
+
+from gate import COOKIE_MAX_AGE_SECONDS, COOKIE_NAME, SessionStore
 
 
 class OIDCDiscoveryError(Exception):
@@ -264,6 +268,102 @@ async def verify_id_token(
     return token.claims
 
 
+async def _exchange_code_for_token(
+    config: OIDCConfig, discovery: dict[str, Any], code: str, *, timeout: float = 10.0
+) -> dict[str, Any]:
+    """POST the authorization code to the provider's token endpoint.
+    Raises :class:`OIDCTokenVerificationError` on any failure -- a failed
+    exchange means the callback as a whole cannot be trusted, the same
+    outcome as a failed signature/claims check.
+    """
+
+    data = {
+        "grant_type": "authorization_code",
+        "code": code,
+        "redirect_uri": config.redirect_uri,
+        "client_id": config.client_id,
+        "client_secret": config.client_secret,
+    }
+    try:
+        async with (
+            aiohttp.ClientSession() as session,
+            session.post(
+                discovery["token_endpoint"],
+                data=data,
+                timeout=aiohttp.ClientTimeout(total=timeout),
+            ) as response,
+        ):
+            response.raise_for_status()
+            return await response.json(content_type=None)
+    except (TimeoutError, aiohttp.ClientError, ValueError, KeyError) as exc:
+        raise OIDCTokenVerificationError(f"token exchange failed: {exc}") from exc
+
+
+def build_oidc_routes(
+    config: OIDCConfig,
+    *,
+    sessions: SessionStore,
+    store: AuthorizationRequestStore,
+) -> tuple[Handler, Handler]:
+    """Return ``(start, callback)`` handlers for the OIDC login path,
+    mirroring :func:`gate.build_login_routes`'s own shape.
+
+    ``sessions`` MUST be the same :class:`gate.SessionStore` instance
+    passed to :func:`gate.build_gate_middleware`, so a session minted
+    here is one the middleware will actually recognise (ADR-002) -- the
+    same requirement :func:`gate.build_login_routes` already documents
+    for its own ``sessions`` parameter.
+    """
+
+    async def start(request: web.Request) -> web.StreamResponse:
+        try:
+            discovery = await fetch_discovery_document(config.issuer_url)
+        except OIDCDiscoveryError as exc:
+            raise web.HTTPServiceUnavailable(
+                text="identity provider unreachable"
+            ) from exc
+        raise web.HTTPFound(build_authorization_url(config, discovery, store))
+
+    async def callback(request: web.Request) -> web.StreamResponse:
+        state = request.query.get("state", "")
+        in_flight = store.pop(state) if state else None
+
+        # Rejects three distinct cases identically: a provider-reported
+        # error (cancelled/failed login), a state nobody issued, and a
+        # state already consumed by a prior callback (FR-011 -- pop()
+        # already made this single-use, so a replay finds nothing here).
+        if "error" in request.query or in_flight is None:
+            raise web.HTTPUnauthorized(text="OIDC login failed")
+
+        code = request.query.get("code", "")
+        try:
+            discovery = await fetch_discovery_document(config.issuer_url)
+            token_response = await _exchange_code_for_token(config, discovery, code)
+            id_token = token_response["id_token"]
+            await verify_id_token(
+                id_token,
+                config=config,
+                discovery=discovery,
+                expected_nonce=in_flight.nonce,
+            )
+        except (OIDCDiscoveryError, OIDCTokenVerificationError, KeyError) as exc:
+            raise web.HTTPUnauthorized(text="OIDC login failed") from exc
+
+        session_token = sessions.issue()
+        redirect = web.HTTPFound("/")
+        redirect.set_cookie(
+            COOKIE_NAME,
+            session_token,
+            max_age=COOKIE_MAX_AGE_SECONDS,
+            httponly=True,
+            secure=True,
+            samesite="Strict",
+        )
+        raise redirect
+
+    return start, callback
+
+
 __all__ = [
     "AuthorizationRequestStore",
     "InFlightAuthRequest",
@@ -271,6 +371,7 @@ __all__ = [
     "OIDCDiscoveryError",
     "OIDCTokenVerificationError",
     "build_authorization_url",
+    "build_oidc_routes",
     "fetch_discovery_document",
     "resolve_oidc_config",
     "verify_id_token",
