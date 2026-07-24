@@ -383,3 +383,221 @@ class TestAuthorizationRequestStoreSingleUseAndCap:
 
         assert store.peek(first.state) is None
         assert len(store) == 3
+
+
+# --------------------------------------------------------------------------
+# ID-token verification -- T015/T016.
+# --------------------------------------------------------------------------
+
+_ISSUER = "https://idp.example.com"
+_CLIENT_ID = "comfyui-curu-auth"
+_KEY_ID = "test-key"
+
+
+def _generate_rsa_key():
+    from joserfc.jwk import RSAKey
+
+    key = RSAKey.generate_key(2048, private=True)
+    return RSAKey.import_key(key.as_dict(private=True), {"kid": _KEY_ID})
+
+
+def _jwks_for(key) -> dict:
+    return {"keys": [key.as_dict(private=False, kid=_KEY_ID)]}
+
+
+def _sign(key, claims: dict) -> str:
+    from joserfc import jwt
+
+    return jwt.encode({"alg": "RS256", "kid": _KEY_ID}, claims, key)
+
+
+def _valid_claims(*, nonce: str = "expected-nonce", **overrides) -> dict:
+    import time
+
+    now = int(time.time())
+    claims = {
+        "iss": _ISSUER,
+        "aud": _CLIENT_ID,
+        "exp": now + 300,
+        "iat": now,
+        "sub": "user-123",
+        "nonce": nonce,
+    }
+    claims.update(overrides)
+    return claims
+
+
+class TestVerifyIdToken:
+    """`verify_id_token` fetches the provider's JWKS fresh (no cache) and
+    verifies the ID token's signature and claims -- every failure mode
+    (bad signature, wrong issuer/audience, wrong/missing nonce, expired,
+    JWKS fetch failure) MUST raise the one `OIDCTokenVerificationError`,
+    exactly mirroring `OIDCDiscoveryError`'s single-exception-type shape
+    (FR-007)."""
+
+    async def _serve_jwks(self, jwks: dict):
+        """Yields (discovery, base_url) for a mocked provider serving
+        `jwks` at /jwks.json."""
+
+        async def _jwks_handler(request: web.Request) -> web.Response:
+            return web.json_response(jwks)
+
+        app = web.Application()
+        app.router.add_get("/jwks.json", _jwks_handler)
+        return app
+
+    async def test_valid_token_is_accepted_and_claims_returned(self) -> None:
+        from oidc import OIDCConfig, verify_id_token
+
+        key = _generate_rsa_key()
+        app = await self._serve_jwks(_jwks_for(key))
+
+        async with TestClient(TestServer(app)) as client:
+            discovery = {"jwks_uri": str(client.make_url("/jwks.json"))}
+            config = OIDCConfig(
+                issuer_url=_ISSUER,
+                client_id=_CLIENT_ID,
+                client_secret="s3cr3t",
+                redirect_uri="https://host/curu-auth/oidc/callback",
+            )
+            token = _sign(key, _valid_claims())
+
+            claims = await verify_id_token(
+                token,
+                config=config,
+                discovery=discovery,
+                expected_nonce="expected-nonce",
+                timeout=5.0,
+            )
+
+        assert claims["sub"] == "user-123"
+        assert claims["iss"] == _ISSUER
+
+    async def test_wrong_signature_is_rejected(self) -> None:
+        from oidc import OIDCConfig, OIDCTokenVerificationError, verify_id_token
+
+        real_key = _generate_rsa_key()
+        attacker_key = _generate_rsa_key()
+        app = await self._serve_jwks(_jwks_for(real_key))
+
+        async with TestClient(TestServer(app)) as client:
+            discovery = {"jwks_uri": str(client.make_url("/jwks.json"))}
+            config = OIDCConfig(
+                issuer_url=_ISSUER,
+                client_id=_CLIENT_ID,
+                client_secret="s3cr3t",
+                redirect_uri="https://host/curu-auth/oidc/callback",
+            )
+            forged_token = _sign(attacker_key, _valid_claims())
+
+            with pytest.raises(OIDCTokenVerificationError):
+                await verify_id_token(
+                    forged_token,
+                    config=config,
+                    discovery=discovery,
+                    expected_nonce="expected-nonce",
+                    timeout=5.0,
+                )
+
+    async def test_wrong_audience_is_rejected(self) -> None:
+        from oidc import OIDCConfig, OIDCTokenVerificationError, verify_id_token
+
+        key = _generate_rsa_key()
+        app = await self._serve_jwks(_jwks_for(key))
+
+        async with TestClient(TestServer(app)) as client:
+            discovery = {"jwks_uri": str(client.make_url("/jwks.json"))}
+            config = OIDCConfig(
+                issuer_url=_ISSUER,
+                client_id=_CLIENT_ID,
+                client_secret="s3cr3t",
+                redirect_uri="https://host/curu-auth/oidc/callback",
+            )
+            token = _sign(key, _valid_claims(aud="some-other-client"))
+
+            with pytest.raises(OIDCTokenVerificationError):
+                await verify_id_token(
+                    token,
+                    config=config,
+                    discovery=discovery,
+                    expected_nonce="expected-nonce",
+                    timeout=5.0,
+                )
+
+    async def test_wrong_nonce_is_rejected(self) -> None:
+        from oidc import OIDCConfig, OIDCTokenVerificationError, verify_id_token
+
+        key = _generate_rsa_key()
+        app = await self._serve_jwks(_jwks_for(key))
+
+        async with TestClient(TestServer(app)) as client:
+            discovery = {"jwks_uri": str(client.make_url("/jwks.json"))}
+            config = OIDCConfig(
+                issuer_url=_ISSUER,
+                client_id=_CLIENT_ID,
+                client_secret="s3cr3t",
+                redirect_uri="https://host/curu-auth/oidc/callback",
+            )
+            token = _sign(key, _valid_claims(nonce="wrong-nonce"))
+
+            with pytest.raises(OIDCTokenVerificationError):
+                await verify_id_token(
+                    token,
+                    config=config,
+                    discovery=discovery,
+                    expected_nonce="expected-nonce",
+                    timeout=5.0,
+                )
+
+    async def test_expired_token_is_rejected(self) -> None:
+        import time
+
+        from oidc import OIDCConfig, OIDCTokenVerificationError, verify_id_token
+
+        key = _generate_rsa_key()
+        app = await self._serve_jwks(_jwks_for(key))
+
+        async with TestClient(TestServer(app)) as client:
+            discovery = {"jwks_uri": str(client.make_url("/jwks.json"))}
+            config = OIDCConfig(
+                issuer_url=_ISSUER,
+                client_id=_CLIENT_ID,
+                client_secret="s3cr3t",
+                redirect_uri="https://host/curu-auth/oidc/callback",
+            )
+            now = int(time.time())
+            token = _sign(
+                key, _valid_claims(exp=now - 100, iat=now - 400)
+            )
+
+            with pytest.raises(OIDCTokenVerificationError):
+                await verify_id_token(
+                    token,
+                    config=config,
+                    discovery=discovery,
+                    expected_nonce="expected-nonce",
+                    timeout=5.0,
+                )
+
+    async def test_jwks_fetch_failure_is_rejected(self) -> None:
+        from oidc import OIDCConfig, OIDCTokenVerificationError, verify_id_token
+
+        key = _generate_rsa_key()
+        config = OIDCConfig(
+            issuer_url=_ISSUER,
+            client_id=_CLIENT_ID,
+            client_secret="s3cr3t",
+            redirect_uri="https://host/curu-auth/oidc/callback",
+        )
+        token = _sign(key, _valid_claims())
+        # Nothing listens on this port -- a real connection failure.
+        discovery = {"jwks_uri": "http://127.0.0.1:1/jwks.json"}
+
+        with pytest.raises(OIDCTokenVerificationError):
+            await verify_id_token(
+                token,
+                config=config,
+                discovery=discovery,
+                expected_nonce="expected-nonce",
+                timeout=2.0,
+            )
