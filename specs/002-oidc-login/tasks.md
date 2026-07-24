@@ -206,7 +206,7 @@ confirm the same `curu_auth` cookie session results.
 - [x] T016-I [US1] Implement ID-token verification in `oidc.py` using
       `joserfc`, fetching JWKS fresh on every call (no cache —
       research.md), so T015-T passes
-- [ ] T017-T [US1] Write a FAILING hermetic test in `tests/test_oidc.py`
+- [x] T017-T [US1] Write a FAILING hermetic test in `tests/test_oidc.py`
       for the callback handler against a mocked provider double
       (`aiohttp.test_utils`): a valid callback (matching `state`, valid
       token) calls the *existing* `SessionStore.issue()` and sets the
@@ -214,18 +214,18 @@ confirm the same `curu_auth` cookie session results.
       new session mechanism (ADR-002/FR-003). References the feature
       file's "Successful provider login establishes a session" scenario.
       **Fails now** — no callback handler exists yet.
-- [ ] T018-I [US1] Implement the token-exchange call (POST to the
+- [x] T018-I [US1] Implement the token-exchange call (POST to the
       provider's token endpoint via `aiohttp`) and callback handler in
       `oidc.py` so T017-T passes
-- [ ] T019-T [US1] Write a FAILING hermetic test in `tests/test_oidc.py`:
+- [x] T019-T [US1] Write a FAILING hermetic test in `tests/test_oidc.py`:
       a callback with a mismatched `state`, or one representing a
       cancelled/failed provider login, does NOT establish a session and
       surfaces an appropriate message. References the feature file's
       "Cancelled or failed provider login does not authenticate" scenario.
       **Fails now**.
-- [ ] T020-I [US1] Implement the cancelled/failed/mismatched-state paths
+- [x] T020-I [US1] Implement the cancelled/failed/mismatched-state paths
       in the callback handler so T019-T passes
-- [ ] T021-T [US1] Write a FAILING hermetic test in `tests/test_oidc.py`:
+- [x] T021-T [US1] Write a FAILING hermetic test in `tests/test_oidc.py`:
       submitting a verbatim replay of a *previously-completed* (already
       succeeded) state/code pair a second time is rejected, not accepted
       again — the In-Flight Auth Request entry is consumed (deleted) on
@@ -235,7 +235,7 @@ confirm the same `curu_auth` cookie session results.
       replayed-nonce were covered, not a verbatim replay of a *successful*
       attempt. References the feature file's "A completed authorization
       attempt cannot be replayed" scenario. **Fails now**.
-- [ ] T022-I [US1] Ensure the callback handler deletes the In-Flight Auth
+- [x] T022-I [US1] Ensure the callback handler deletes the In-Flight Auth
       Request entry on every path (success and failure) before it
       returns, so T021-T passes
 - [ ] T023-I [US1] Wire `oidc.py`'s routes into `__init__.py`: only
