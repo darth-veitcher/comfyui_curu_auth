@@ -878,23 +878,19 @@ class TestOidcStartRouteIsRateLimitedAndCapped:
             store = AuthorizationRequestStore()
             sessions = SessionStore()
 
-            start, _callback = build_oidc_routes(
-                config, sessions=sessions, store=store
-            )
+            start, _callback = build_oidc_routes(config, sessions=sessions, store=store)
             node_app = web.Application()
             node_app.router.add_get(_START_PATH, start)
 
             async with TestClient(TestServer(node_app)) as node_client:
                 for _ in range(5):
-                    response = await node_client.get(
-                        _START_PATH, allow_redirects=False
-                    )
+                    response = await node_client.get(_START_PATH, allow_redirects=False)
                     assert response.status in (302, 303, 307)
 
     async def test_the_store_used_by_the_start_route_stays_size_capped(
         self,
     ) -> None:
-        from gate import RateLimiter, SessionStore
+        from gate import SessionStore
         from oidc import AuthorizationRequestStore, OIDCConfig, build_oidc_routes
 
         holder = {"base_url": "https://idp.example.com"}
@@ -911,9 +907,7 @@ class TestOidcStartRouteIsRateLimitedAndCapped:
             store = AuthorizationRequestStore(max_size=3)
             sessions = SessionStore()
 
-            start, _callback = build_oidc_routes(
-                config, sessions=sessions, store=store
-            )
+            start, _callback = build_oidc_routes(config, sessions=sessions, store=store)
             node_app = web.Application()
             node_app.router.add_get(_START_PATH, start)
 

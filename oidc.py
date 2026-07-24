@@ -39,14 +39,22 @@ try:
     from .gate import (  # ty: ignore[unresolved-import]
         COOKIE_MAX_AGE_SECONDS,
         COOKIE_NAME,
+        RateLimiter,
         SessionStore,
+        client_key,
     )
 except ImportError:
     # Hermetic test context: tests/test_oidc.py imports this module bare
     # (pyproject.toml's pythonpath = ["."] puts the repo root, and
     # therefore gate.py, directly on sys.path) -- no parent package
     # exists for a relative import to resolve against.
-    from gate import COOKIE_MAX_AGE_SECONDS, COOKIE_NAME, SessionStore
+    from gate import (
+        COOKIE_MAX_AGE_SECONDS,
+        COOKIE_NAME,
+        RateLimiter,
+        SessionStore,
+        client_key,
+    )
 
 #: The two OIDC routes -- reachable pre-session by definition, so
 #: __init__.py registers them in gate.py's `public_paths` set (ADR-003)
@@ -327,6 +335,7 @@ def build_oidc_routes(
     *,
     sessions: SessionStore,
     store: AuthorizationRequestStore,
+    rate_limiter: RateLimiter | None = None,
 ) -> tuple[Handler, Handler]:
     """Return ``(start, callback)`` handlers for the OIDC login path,
     mirroring :func:`gate.build_login_routes`'s own shape.
@@ -336,9 +345,38 @@ def build_oidc_routes(
     here is one the middleware will actually recognise (ADR-002) -- the
     same requirement :func:`gate.build_login_routes` already documents
     for its own ``sessions`` parameter.
+
+    ``rate_limiter``, when supplied, backs off the start route exactly
+    like :func:`gate.build_login_routes` already backs off the login
+    form (FR-010) -- the start route sits in the public-paths bypass by
+    necessity (reachable pre-session, the same as the login form always
+    has been), so nothing else limits how often an unauthenticated
+    caller can hit it. ``rate_limiter=None`` (the default) leaves it
+    unthrottled, matching every other opt-in ``rate_limiter`` parameter
+    in this codebase (:func:`gate.build_gate_middleware`,
+    :func:`gate.build_login_routes`).
     """
 
     async def start(request: web.Request) -> web.StreamResponse:
+        if rate_limiter is not None:
+            key = client_key(request)
+            retry_after = rate_limiter.seconds_until_retry(key)
+            if retry_after > 0:
+                seconds = int(retry_after) + 1
+                return web.json_response(
+                    {"detail": "too many attempts", "retry_after": seconds},
+                    status=429,
+                    headers={"Retry-After": str(seconds)},
+                )
+            # Every hit counts, not just failed logins -- this route has
+            # no credential to check, so (unlike the login form) there's
+            # no separate "success" outcome that would otherwise reset
+            # the count via record_success. Matches this gate's existing
+            # posture: any unauthenticated hit on a rate-limited path
+            # already counts against it (e.g. the Bearer-header path's
+            # own middleware behavior).
+            rate_limiter.record_failure(key)
+
         try:
             discovery = await fetch_discovery_document(config.issuer_url)
         except OIDCDiscoveryError as exc:

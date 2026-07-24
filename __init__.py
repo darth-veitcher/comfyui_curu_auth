@@ -119,6 +119,7 @@ if server is not None:
             _oidc_config,
             sessions=_sessions,
             store=_oidc_store,
+            rate_limiter=_rate_limiter,
         )
         _app.router.add_get(OIDC_START_PATH, _oidc_start)
         _app.router.add_get(OIDC_CALLBACK_PATH, _oidc_callback)
