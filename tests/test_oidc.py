@@ -850,6 +850,92 @@ class TestOidcCallbackHandler:
 
         assert second.status not in (302, 303, 307)
 
+    async def test_a_rejected_callback_is_logged_via_the_existing_format(
+        self, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        """FR unstated-but-implied by US3/the feature file's "Failed OIDC
+        attempts are logged like other paths" scenario: a rejected
+        callback (here, a mismatched/never-issued `state`) MUST log via
+        the *existing* stable, greppable warning format this gate already
+        uses for the Bearer-header and login-form paths -- not a parallel
+        mechanism (fail2ban/crowdsec key off this one format)."""
+
+        from gate import SessionStore
+        from oidc import AuthorizationRequestStore, OIDCConfig, build_oidc_routes
+
+        config = OIDCConfig(
+            issuer_url="https://idp.example.com",
+            client_id=_CLIENT_ID,
+            client_secret="s3cr3t",
+            redirect_uri=f"https://comfyui.example{_CALLBACK_PATH}",
+        )
+        store = AuthorizationRequestStore()
+        sessions = SessionStore()
+
+        _start, callback = build_oidc_routes(config, sessions=sessions, store=store)
+        node_app = web.Application()
+        node_app.router.add_get(_CALLBACK_PATH, callback)
+
+        with caplog.at_level("WARNING", logger="comfyui_curu_auth"):
+            async with TestClient(TestServer(node_app)) as node_client:
+                response = await node_client.get(
+                    _CALLBACK_PATH,
+                    params={"code": "mock-auth-code", "state": "never-issued"},
+                    allow_redirects=False,
+                )
+
+        assert response.status not in (302, 303, 307)
+        assert any(
+            "authentication failure" in r.message and "oidc callback" in r.message
+            for r in caplog.records
+        )
+
+    async def test_repeated_rejected_callbacks_from_the_same_client_are_rate_limited(
+        self,
+    ) -> None:
+        """Same scenario, this time asserting the *existing* `RateLimiter`
+        this gate already backs the Bearer-header and login-form paths
+        with -- a second rejected callback from the same client gets 429
+        before the state/code are even looked at, exactly like a second
+        wrong login-form submission already does."""
+
+        from gate import RateLimiter, SessionStore
+        from oidc import AuthorizationRequestStore, OIDCConfig, build_oidc_routes
+
+        config = OIDCConfig(
+            issuer_url="https://idp.example.com",
+            client_id=_CLIENT_ID,
+            client_secret="s3cr3t",
+            redirect_uri=f"https://comfyui.example{_CALLBACK_PATH}",
+        )
+        store = AuthorizationRequestStore()
+        sessions = SessionStore()
+        limiter = RateLimiter()
+
+        _start, callback = build_oidc_routes(
+            config, sessions=sessions, store=store, rate_limiter=limiter
+        )
+        node_app = web.Application()
+        node_app.router.add_get(_CALLBACK_PATH, callback)
+
+        async with TestClient(TestServer(node_app)) as node_client:
+            first = await node_client.get(
+                _CALLBACK_PATH,
+                params={"code": "mock-auth-code", "state": "never-issued"},
+                allow_redirects=False,
+            )
+            assert first.status not in (302, 303, 307)
+            assert first.status != 429  # the *first* failure isn't blocked yet
+
+            second = await node_client.get(
+                _CALLBACK_PATH,
+                params={"code": "mock-auth-code", "state": "never-issued"},
+                allow_redirects=False,
+            )
+
+        assert second.status == 429
+        assert "Retry-After" in second.headers
+
 
 # --------------------------------------------------------------------------
 # Start-route rate-limit + in-flight store cap -- T026/T027 (FR-010).
