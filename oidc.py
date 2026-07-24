@@ -418,16 +418,6 @@ def build_oidc_routes(
     async def callback(request: web.Request) -> web.StreamResponse:
         key = client_key(request)
 
-        if rate_limiter is not None:
-            retry_after = rate_limiter.seconds_until_retry(key)
-            if retry_after > 0:
-                seconds = int(retry_after) + 1
-                return web.json_response(
-                    {"detail": "too many attempts", "retry_after": seconds},
-                    status=429,
-                    headers={"Retry-After": str(seconds)},
-                )
-
         state = request.query.get("state", "")
         in_flight = store.pop(state) if state else None
 
@@ -435,7 +425,32 @@ def build_oidc_routes(
         # error (cancelled/failed login), a state nobody issued, and a
         # state already consumed by a prior callback (FR-011 -- pop()
         # already made this single-use, so a replay finds nothing here).
+        #
+        # The rate-limit check lives *inside* this branch, not ahead of
+        # it -- deliberately. `start` (T027-I) charges a failure for
+        # *every* hit, including a legitimate one, so a real login's own
+        # start-then-callback round trip already carries one accrued
+        # failure by the time it reaches here; gating on that unqualified
+        # would occasionally 429 a real login that completes faster than
+        # `base_delay` (confirmed live: a browser with an existing
+        # Authelia session round-trips well under a second). A `state`
+        # `store.pop()` just recognised is exactly as strong a proof of
+        # legitimacy as a correct Bearer credential -- unguessable,
+        # single-use, minted by this same process's own `start` call --
+        # so it bypasses the check the same way a correct credential
+        # bypasses the Bearer-header path's own rate limit (gate.py).
+        # Only a request this gate is about to reject anyway (no such
+        # state) pays the backoff.
         if "error" in request.query or in_flight is None:
+            if rate_limiter is not None:
+                retry_after = rate_limiter.seconds_until_retry(key)
+                if retry_after > 0:
+                    seconds = int(retry_after) + 1
+                    return web.json_response(
+                        {"detail": "too many attempts", "retry_after": seconds},
+                        status=429,
+                        headers={"Retry-After": str(seconds)},
+                    )
             _reject_callback(key)
 
         code = request.query.get("code", "")

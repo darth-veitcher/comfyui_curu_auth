@@ -344,14 +344,14 @@ and logging behavior as the existing paths.
       logged like other paths" scenario. **Fails now**.
 - [x] T037-I [US3] Wire the existing `RateLimiter`/logger calls into the
       callback handler's failure paths so T036-T passes
-- [ ] T038-T [US3] Write a FAILING live test in
+- [x] T038-T [US3] Write a FAILING live test in
       `tests/system/test_oidc_harness.py`, paced like spec 001's own
       T011/T012 (research.md's pacing decision, `gate.py`'s
       `RateLimiter.record_failure` is skipped while already blocked):
       repeated failed OIDC callbacks against the real Authelia harness
       trigger the same growing `Retry-After` backoff the credential path
       already exhibits. **Fails now**.
-- [ ] T039-I [US3] Confirm T037-I's wiring makes T038-T pass against the
+- [x] T039-I [US3] Confirm T037-I's wiring makes T038-T pass against the
       real harness (likely no new code — this validates the hermetic
       T036-T/T037-I pairing holds true end-to-end, the same "validates
       pre-existing behavior" pattern spec 001's own T011/T012 hit)

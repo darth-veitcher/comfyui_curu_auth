@@ -10,6 +10,8 @@ docstring.
 
 from __future__ import annotations
 
+import asyncio
+
 import aiohttp
 import pytest
 
@@ -103,3 +105,50 @@ class TestOidcLoginAgainstRealAuthelia:
             ) as response,
         ):
             assert response.status == 200
+
+
+class TestRepeatedFailedOidcCallbacksTriggerBackoff:
+    """Witness: feature file's "Repeated failed OIDC attempts trigger
+    backoff" scenario (spec 002 US3, T038/T039) -- the callback handler
+    shares the exact same `RateLimiter` instance every other
+    unauthenticated path already uses (T037-I), verified here against the
+    real harness rather than only the hermetic mock.
+
+    Paced identically to spec 001's own
+    `TestRepeatedWrongCredentialsTriggerBackoff` (research.md): a failed
+    callback only ever returns 401 itself (the block it sets applies to
+    the *next* request), so an immediate follow-up "probe" -- any request
+    to the same rate-limited route, from the same client identity --
+    reads the current `Retry-After` as 429 without itself counting as a
+    fresh failure (the block-check short-circuits before
+    `record_failure`).
+    """
+
+    async def test_repeated_failed_oidc_callbacks_trigger_backoff(self) -> None:
+        up_result = compose("up", "-d", env=OIDC_ENV)
+        assert up_result.returncode == 0, up_result.stderr
+        await wait_until_reachable(timeout=180.0)
+
+        client_id = {"X-Forwarded-For": "203.0.113.41"}
+        # A state nobody issued -- always rejected, with no side effects
+        # beyond the rate-limiter/log entry T037-I added.
+        bad_callback_url = f"{BASE_URL}/curu-auth/oidc/callback?state=never-issued"
+
+        retry_afters: list[int] = []
+        async with aiohttp.ClientSession() as session:
+            for _ in range(3):
+                async with session.get(
+                    bad_callback_url, headers=client_id, allow_redirects=False
+                ) as failed:
+                    assert failed.status == 401
+
+                async with session.get(
+                    bad_callback_url, headers=client_id, allow_redirects=False
+                ) as probe:
+                    assert probe.status == 429
+                    retry_afters.append(int(probe.headers["Retry-After"]))
+
+                await asyncio.sleep(retry_afters[-1] + 0.2)
+
+        assert retry_afters[1] > retry_afters[0], retry_afters
+        assert retry_afters[2] > retry_afters[1], retry_afters

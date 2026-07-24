@@ -16,6 +16,7 @@ import importlib.util
 import sys
 import types
 from pathlib import Path
+from urllib.parse import parse_qs, urlsplit
 
 import pytest
 from aiohttp import web
@@ -1048,6 +1049,73 @@ class TestOidcStartRouteIsRateLimitedAndCapped:
                     await node_client.get(_START_PATH, allow_redirects=False)
 
         assert len(store) == 3
+
+
+class TestSharedRateLimiterDoesNotSelfBlockALegitimateLogin:
+    """Regression witness: `start` (T027-I) charges a failure for *every*
+    hit, including a legitimate one -- so a real login's own
+    start-then-callback round trip already carries one accrued failure
+    by the time it reaches `callback`. Discovered live (T038/T039)
+    against the real Docker harness: a browser with an existing Authelia
+    session round-trips start->authorize->callback in well under
+    `RateLimiter`'s 1-second `base_delay`, and an earlier version of
+    `callback`'s own rate-limit check blocked that legitimate completion
+    with a 429 it had no way to recover from. `callback` MUST NOT apply
+    the pre-emptive block to a request carrying a `state` its own store
+    just recognised -- only to ones it was going to reject anyway."""
+
+    async def test_a_fast_legitimate_round_trip_through_start_is_not_blocked(
+        self,
+    ) -> None:
+        from gate import RateLimiter, SessionStore
+        from oidc import AuthorizationRequestStore, OIDCConfig, build_oidc_routes
+
+        key = _generate_rsa_key()
+        holder: dict = {"base_url": "https://idp.example.com"}
+        provider_app = _mock_provider_app(key, holder)
+
+        async with TestClient(TestServer(provider_app)) as provider_client:
+            holder["base_url"] = str(provider_client.make_url("")).rstrip("/")
+
+            config = OIDCConfig(
+                issuer_url=holder["base_url"],
+                client_id=_CLIENT_ID,
+                client_secret="s3cr3t",
+                redirect_uri=f"https://comfyui.example{_CALLBACK_PATH}",
+            )
+            store = AuthorizationRequestStore()
+            sessions = SessionStore()
+            limiter = RateLimiter()
+
+            start, callback = build_oidc_routes(
+                config, sessions=sessions, store=store, rate_limiter=limiter
+            )
+            node_app = web.Application()
+            node_app.router.add_get(_START_PATH, start)
+            node_app.router.add_get(_CALLBACK_PATH, callback)
+
+            async with TestClient(TestServer(node_app)) as node_client:
+                # Same client hitting `start` -- accrues one failure
+                # under the shared limiter (T027-I's own, unrelated-to-
+                # legitimacy design), same as a real browser's first step.
+                start_response = await node_client.get(
+                    _START_PATH, allow_redirects=False
+                )
+                assert start_response.status in (302, 303, 307)
+                authorization_url = start_response.headers["Location"]
+                query = parse_qs(urlsplit(authorization_url).query)
+                state = query["state"][0]
+                holder["nonce"] = query["nonce"][0]
+
+                # Immediately (same test, no sleep) completes the flow --
+                # MUST succeed despite the accrued failure above.
+                callback_response = await node_client.get(
+                    _CALLBACK_PATH,
+                    params={"code": "mock-auth-code", "state": state},
+                    allow_redirects=False,
+                )
+
+        assert callback_response.status in (302, 303, 307), callback_response.status
 
 
 # --------------------------------------------------------------------------

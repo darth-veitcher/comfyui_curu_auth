@@ -373,6 +373,44 @@ enforces PKCE gives false confidence; the live test against the real
 IdP is what actually exercises the security-relevant contract, not just
 the shape of the request.
 
+## Discovered during T038: the callback's own rate-limit check could self-block a legitimate login
+
+**What happened**: `start` (T027-I) charges the shared `RateLimiter` a
+failure for *every* hit, including a legitimate one -- there's no
+credential at that route to distinguish success from abuse, so any hit
+counts (by design, to bound repeated discovery-document fetches). When
+T037-I gave `callback` its own pre-emptive rate-limit check ahead of any
+processing, a real login's own start-then-callback round trip already
+carried one accrued failure by the time it reached `callback`. Against
+the real Docker harness (not the hermetic mock, which has no timing),
+this round-trip completed in well under `RateLimiter`'s 1-second
+`base_delay` -- Authelia with an existing session round-trips
+start -> authorize -> callback almost instantly, no human typing
+involved -- so the legitimate completion itself got a 429 with no way
+to recover (T028's own test started failing intermittently once T037-I
+landed).
+
+**Fix**: moved the pre-emptive `retry_after` check inside the
+"no valid in-flight state" branch, rather than ahead of the whole
+handler. A `state` `store.pop()` just recognised is exactly as strong a
+proof of legitimacy as a correct Bearer credential -- unguessable,
+single-use, minted by this same process's own `start` call moments
+earlier -- so it now bypasses the check the same way a correct
+credential already bypasses the Bearer-header path's own rate limit in
+`gate.py`. Only a callback this gate was going to reject anyway (no
+such state, provider error) pays the backoff. Added a dedicated
+hermetic regression test
+(`TestSharedRateLimiterDoesNotSelfBlockALegitimateLogin`) alongside the
+live T038 test, since the hermetic mock's speed means this class of bug
+needs an explicit assertion, not just "the test happened to run fast".
+
+**Lesson for future rate-limit work sharing one `RateLimiter` across
+routes**: a route that counts *every* hit (not just failures) against
+the shared key can silently starve a *different* route's own check if
+that other route sits downstream of it in the same legitimate flow --
+worth tracing the full happy-path sequence through every rate-limited
+checkpoint, not just each route in isolation.
+
 ## Decision: No `contracts/` directory
 
 **Rationale**: Consistent with `specs/001-docker-comfyui-harness/`'s own
