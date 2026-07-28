@@ -35,15 +35,22 @@ There's no way to fetch the credential over the network — it only ever
 prints to the console. That's deliberate: no automated credential
 exchange means no new attack surface for one.
 
-## Pin a credential instead of a fresh one every restart
+## Pinning a credential
 
 ```bash
 export COMFYUI_CURU_AUTH_TOKEN="$(python3 -c 'import secrets; print(secrets.token_urlsafe(32))')"
 ```
 
 Set it however you start ComfyUI — shell export, a systemd unit's
-`Environment=`, a `docker-compose.yml` `environment:` entry. Unset (the
-default) keeps a fresh random credential every restart.
+`Environment=`, a `docker-compose.yml` `environment:` entry.
+
+Either way, the active credential — pinned or auto-generated — is persisted
+under ComfyUI's own `user/default/comfyui_curu_auth/credential` and reused
+on every later restart, so it stays the same even if you never set the
+env var, and even across a Manager-triggered reboot (which reuses the
+process's existing environment, so it wouldn't otherwise pick up an env
+var set after ComfyUI first started). Setting the env var always takes
+precedence and updates the persisted file to match.
 
 ## Optional: log in through your own identity provider
 

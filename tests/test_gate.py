@@ -9,6 +9,7 @@ requires a real ComfyUI ``server`` module) -- only ``gate.py`` itself.
 from __future__ import annotations
 
 import asyncio
+from pathlib import Path
 
 import pytest
 from aiohttp import web
@@ -23,7 +24,7 @@ from gate import (
     build_login_routes,
     client_key,
     generate_credential,
-    resolve_credential,
+    resolve_persistent_credential,
 )
 
 # --------------------------------------------------------------------------
@@ -41,25 +42,93 @@ class TestGenerateCredential:
         assert generate_credential() != generate_credential()
 
 
-class TestResolveCredential:
+class TestResolvePersistentCredential:
     """`COMFYUI_CURU_AUTH_TOKEN` (or whatever env var `__init__.py` reads)
-    lets an operator (or an automated test harness) pin a known,
-    persistent credential instead of scraping a freshly random one from
-    the console every restart."""
+    lets an operator pin a known credential; `state_path` (a file under
+    ComfyUI's own `user/` directory, resolved by `__init__.py` -- `None`
+    outside a real ComfyUI install) is what makes that credential -- pinned
+    or freshly generated -- survive a restart that reuses the process's
+    existing environment (an `os.execv`-based Manager reboot never
+    refreshes `os.environ` from outside; only a persisted file does).
+    """
 
-    def test_an_empty_env_value_falls_back_to_a_generated_credential(self) -> None:
-        credential = resolve_credential(None)
+    def test_an_empty_env_value_falls_back_to_a_generated_credential(
+        self, tmp_path: Path
+    ) -> None:
+        credential = resolve_persistent_credential(None, tmp_path / "credential")
         assert isinstance(credential, str)
         assert credential != ""
 
-    def test_a_blank_string_env_value_also_falls_back(self) -> None:
+    def test_a_blank_string_env_value_also_falls_back(self, tmp_path: Path) -> None:
         # os.environ.get returns "" for a declared-but-empty env var, not
         # None -- both must fall back, not treat "" as a real credential.
-        credential = resolve_credential("")
+        credential = resolve_persistent_credential("", tmp_path / "credential")
         assert credential != ""
 
-    def test_a_supplied_env_value_is_used_verbatim(self) -> None:
-        assert resolve_credential("fixed-test-credential") == "fixed-test-credential"
+    def test_a_supplied_env_value_is_used_verbatim(self, tmp_path: Path) -> None:
+        credential = resolve_persistent_credential(
+            "fixed-test-credential", tmp_path / "credential"
+        )
+        assert credential == "fixed-test-credential"
+
+    def test_supplied_env_value_is_persisted_to_state_path(
+        self, tmp_path: Path
+    ) -> None:
+        state_path = tmp_path / "credential"
+        resolve_persistent_credential("pinned-token", state_path)
+        assert state_path.read_text(encoding="utf-8").strip() == "pinned-token"
+
+    def test_no_env_value_reuses_a_previously_persisted_credential(
+        self, tmp_path: Path
+    ) -> None:
+        state_path = tmp_path / "credential"
+        state_path.write_text("already-persisted", encoding="utf-8")
+        assert resolve_persistent_credential(None, state_path) == "already-persisted"
+
+    def test_no_env_value_and_nothing_persisted_generates_and_persists(
+        self, tmp_path: Path
+    ) -> None:
+        state_path = tmp_path / "nested" / "credential"
+        credential = resolve_persistent_credential(None, state_path)
+        assert credential != ""
+        assert state_path.read_text(encoding="utf-8").strip() == credential
+
+    def test_generated_credential_is_stable_across_repeated_calls(
+        self, tmp_path: Path
+    ) -> None:
+        state_path = tmp_path / "credential"
+        first = resolve_persistent_credential(None, state_path)
+        second = resolve_persistent_credential(None, state_path)
+        assert first == second
+
+    def test_env_value_overrides_and_replaces_a_stale_persisted_value(
+        self, tmp_path: Path
+    ) -> None:
+        state_path = tmp_path / "credential"
+        state_path.write_text("stale-value", encoding="utf-8")
+        credential = resolve_persistent_credential("new-pinned-token", state_path)
+        assert credential == "new-pinned-token"
+        assert state_path.read_text(encoding="utf-8").strip() == "new-pinned-token"
+
+    def test_none_state_path_still_resolves_without_persisting(self) -> None:
+        # No ComfyUI install (folder_paths absent) -- __init__.py passes
+        # None. Must still resolve a usable credential, just with nothing
+        # surviving a restart -- today's exact pre-fix behaviour.
+        credential = resolve_persistent_credential(None, None)
+        assert credential != ""
+
+    def test_state_path_whose_parent_is_a_file_degrades_gracefully(
+        self, tmp_path: Path
+    ) -> None:
+        # A real (non-mocked) OSError condition: mkdir(parents=True) on a
+        # path where a parent segment is itself a file, not a directory.
+        # Must still resolve a credential rather than raising -- fail safe
+        # to "gate stays on," never "gate breaks provisioning."
+        blocking_file = tmp_path / "not_a_directory"
+        blocking_file.write_text("i am a file", encoding="utf-8")
+        state_path = blocking_file / "credential"
+        credential = resolve_persistent_credential(None, state_path)
+        assert credential != ""
 
 
 # --------------------------------------------------------------------------
