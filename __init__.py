@@ -16,44 +16,26 @@ ComfyUI installation, so this file's own hermetic test coverage
 (``tests/test_gate.py``) never imports this module at all, only
 ``gate.py`` directly.
 
-Importing ``gate`` (as ``tests/test_gate.py`` does) necessarily executes
-this package's own ``__init__.py`` first -- that is how Python submodule
-imports work. An unconditional ``import server`` here would therefore
-break this package's own hermetic test collection outside a real ComfyUI
-process, not just fail to run its side effect. The ``try``/``except
-ImportError`` below is the minimal fix: identical behaviour inside a real
-ComfyUI process (``server`` resolves, the credential is generated,
-printed, and wired onto ``app.middlewares``), and a clean no-op when
-imported anywhere else (this package's own tests, or any other
-non-ComfyUI Python environment).
+The ``.gate``/``.oidc`` relative imports below only resolve under a real
+parent-package context: ComfyUI's own custom-node loader gives this
+directory one (``submodule_search_locations``) before exec'ing this file,
+and this repo's own ``_load_init_with_fake_server`` test helper
+(``tests/test_oidc.py``) constructs an equivalent one deliberately. Any
+*other* import of this file -- notably ``pytest``'s own ``Package.setup()``,
+which unconditionally imports every ``__init__.py`` it finds as soon as
+*any* test elsewhere in this repo runs, regardless of whether that test
+has anything to do with this module -- has no such context, and hits a
+plain ``ImportError: attempted relative import with no known parent
+package``. The ``try``/``except ImportError`` below covers both that case
+and the (previously separately-handled) "no real ComfyUI ``server``"
+case identically: neither has anything to wire up, so both are a clean
+no-op.
 """
 
 from __future__ import annotations
 
 import os
-
-from .gate import (  # ty: ignore[unresolved-import]  # ComfyUI's own custom-
-    # node loader gives this directory a real package identity
-    # (submodule_search_locations) before exec'ing this file, so this
-    # relative import resolves correctly at runtime -- `ty check`, run
-    # standalone with no such loader present, cannot model that synthetic
-    # package context (the same reason `import server` below needs its own
-    # ignore comment) and would otherwise misreport this as unresolved.
-    LOGIN_PATH,
-    RateLimiter,
-    SessionStore,
-    build_gate_middleware,
-    build_login_routes,
-    resolve_credential,
-)
-from .oidc import (  # ty: ignore[unresolved-import]  # same synthetic-package
-    # reasoning as the .gate import above.
-    OIDC_CALLBACK_PATH,
-    OIDC_START_PATH,
-    AuthorizationRequestStore,
-    build_oidc_routes,
-    resolve_oidc_config,
-)
+from pathlib import Path
 
 WEB_DIRECTORY = None  # no JS of its own -- this is a server-side-only gate
 NODE_CLASS_MAPPINGS: dict[str, object] = {}
@@ -61,18 +43,57 @@ NODE_DISPLAY_NAME_MAPPINGS: dict[str, str] = {}
 
 try:
     import server  # ty: ignore[unresolved-import]  # ComfyUI's own module,
+
+    from .gate import (  # ty: ignore[unresolved-import]  # see module docstring
+        LOGIN_PATH,
+        RateLimiter,
+        SessionStore,
+        build_gate_middleware,
+        build_login_routes,
+        resolve_persistent_credential,
+    )
+    from .oidc import (  # ty: ignore[unresolved-import]  # same reasoning
+        OIDC_CALLBACK_PATH,
+        OIDC_START_PATH,
+        AuthorizationRequestStore,
+        build_oidc_routes,
+        resolve_oidc_config,
+    )
     # only importable inside a real ComfyUI installation -- never present in
     # this repo's own environment, so `ty check` cannot resolve it either.
 except ImportError:
-    server = None  # imported outside a real ComfyUI process -- nothing to wire up
+    server = None  # nothing to wire up -- see module docstring
 
 if server is not None:
+    # folder_paths is ComfyUI's own module (same resolution story as
+    # `server` above) exposing where ComfyUI persists per-install state --
+    # `user/default/...` is where its own settings/workflows already live.
+    # Absence degrades to "no persistence" (state_path=None), not to
+    # disabling the gate entirely -- a working, just non-restart-stable,
+    # credential is still strictly better than no auth at all (constitution
+    # III: "fail safe to gate stays on", never to "gate is open").
+    try:
+        import folder_paths  # ty: ignore[unresolved-import]
+
+        _state_path: Path | None = (
+            Path(folder_paths.get_user_directory())
+            / "default"
+            / "comfyui_curu_auth"
+            / "credential"
+        )
+    except ImportError:
+        _state_path = None
+
     # COMFYUI_CURU_AUTH_TOKEN lets an operator (or an automated test
-    # harness) pin a known, persistent credential instead of always
-    # scraping a freshly random one from the console -- see
-    # resolve_credential's own docstring. Unset (the default) keeps prior
-    # behaviour exactly: a fresh, random credential every restart.
-    _credential = resolve_credential(os.environ.get("COMFYUI_CURU_AUTH_TOKEN"))
+    # harness, or `runpod-comfy`'s own provisioning) pin a known credential
+    # -- see resolve_persistent_credential's own docstring for how it and
+    # `_state_path` interact to survive a restart that reuses the process's
+    # existing environment (an `os.execv`-based Manager reboot never picks
+    # up an externally-set env var after the fact; only a persisted file
+    # does, since re-importing this module re-reads it from scratch).
+    _credential = resolve_persistent_credential(
+        os.environ.get("COMFYUI_CURU_AUTH_TOKEN"), _state_path
+    )
     print(f"comfyui-curu-auth gate active. Credential:\n  {_credential}")
     print(f"Browser login (paste the same credential above): {LOGIN_PATH}")
     _sessions = SessionStore()

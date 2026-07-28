@@ -10,9 +10,11 @@ hermetic ``pytest`` suite at all, with no real ComfyUI process needed.
 
 from __future__ import annotations
 
+import contextlib
 import logging
 import secrets
 import time
+from pathlib import Path
 
 from aiohttp import web
 from aiohttp.typedefs import Handler, Middleware
@@ -61,23 +63,65 @@ def generate_credential() -> str:
     return secrets.token_urlsafe(32)
 
 
-def resolve_credential(env_value: str | None) -> str:
-    """`env_value` if it's a real, non-empty string; otherwise a fresh
-    :func:`generate_credential`.
+def _read_persisted_credential(state_path: Path | None) -> str | None:
+    if state_path is None:
+        return None
+    try:
+        value = state_path.read_text(encoding="utf-8").strip()
+    except OSError:
+        return None
+    return value or None
 
-    Lets an operator (or an automated test harness) pin a known,
-    persistent credential via an environment variable --
-    `__init__.py` calls this with
-    ``os.environ.get("COMFYUI_CURU_AUTH_TOKEN")`` -- instead of always
-    scraping a freshly random one from the console after every restart.
-    ``os.environ.get`` returns ``""`` for a declared-but-empty variable,
-    not ``None``, so both are treated as "not supplied", not as a
-    (useless, insecure) empty credential.
+
+def _write_persisted_credential(state_path: Path | None, credential: str) -> None:
+    if state_path is None:
+        return
+    try:
+        state_path.parent.mkdir(parents=True, exist_ok=True)
+        state_path.write_text(credential, encoding="utf-8")
+        with contextlib.suppress(OSError):
+            state_path.chmod(0o600)  # credential file -- operator-readable only
+    except OSError:
+        pass
+
+
+def resolve_persistent_credential(
+    env_value: str | None, state_path: Path | None
+) -> str:
+    """Resolve the active credential and keep `state_path` in sync with it.
+
+    Precedence: `env_value` (an explicit operator override) beats whatever
+    is already persisted at `state_path`, which beats a freshly generated
+    one. `os.environ.get` returns `""` for a declared-but-empty variable,
+    not `None`, so both are treated as "not supplied", not as a (useless,
+    insecure) empty credential -- same reasoning the old `resolve_credential`
+    (removed; this supersedes it) already had.
+
+    Every resolution re-writes `state_path` (best-effort) so the *next*
+    restart reuses the same value regardless of how this one got it:
+    `env_value` this time becomes the persisted value next time, and an
+    auto-generated credential -- previously a fresh one every single
+    restart -- is now stable across restarts too. This is what makes an
+    `os.execv`-based Manager reboot (which reuses the process's existing
+    `os.environ` and can never pick up an externally-set env var after the
+    fact) still see the same credential: it re-imports this module from
+    scratch, so it re-reads `state_path` from scratch too.
+
+    `state_path` is `None` outside a real ComfyUI install (`__init__.py`
+    only resolves one via `folder_paths`, which itself only resolves
+    inside ComfyUI) -- resolution still works, just with nothing to
+    persist. Any filesystem error (permission issue, read-only volume, a
+    parent path segment that's actually a file) is swallowed silently:
+    this must fail safe to "gate stays on with whatever credential was
+    resolved this run," never to "provisioning breaks because a state
+    file couldn't be written."
     """
-
     if env_value:
-        return env_value
-    return generate_credential()
+        credential = env_value
+    else:
+        credential = _read_persisted_credential(state_path) or generate_credential()
+    _write_persisted_credential(state_path, credential)
+    return credential
 
 
 def build_gate_middleware(
