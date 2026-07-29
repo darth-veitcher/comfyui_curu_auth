@@ -1261,3 +1261,60 @@ class TestInitPyWiringIsOidcAware:
             body = await response.text()
 
         assert "identity provider" in body
+
+
+# --------------------------------------------------------------------------
+# issue #5: a missing *optional* joserfc install must never disable the
+# *mandatory* bearer-token gate.
+# --------------------------------------------------------------------------
+
+
+def _block_joserfc(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Simulate ``joserfc`` not being installed: the documented
+    ``sys.modules[name] = None`` trick makes ``import joserfc`` (and any
+    ``from joserfc... import ...``) raise ``ImportError``, exactly as it
+    would in a real environment lacking the package -- without needing to
+    actually uninstall it from this dev environment.
+    """
+
+    monkeypatch.setitem(sys.modules, "joserfc", None)
+
+
+class TestGateSurvivesMissingJoserfc:
+    """issue #5: eagerly importing ``joserfc`` at ``oidc.py`` module level
+    meant a pod missing that *optional* OIDC dependency took the *entire*
+    gate down -- including the mandatory Bearer-token/credential path,
+    which has nothing to do with OIDC -- because ``__init__.py`` imports
+    ``oidc`` unconditionally. The fix defers the ``joserfc`` import to the
+    two call sites that actually need it (module docstring)."""
+
+    def test_oidc_module_imports_cleanly_without_joserfc(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        _block_joserfc(monkeypatch)
+        monkeypatch.delitem(sys.modules, "oidc", raising=False)
+
+        import oidc  # must not raise ModuleNotFoundError
+
+        assert hasattr(oidc, "resolve_oidc_config")
+
+    async def test_the_real_init_py_wiring_still_gates_without_joserfc(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        # The property issue #5 actually cares about: with joserfc wholly
+        # unavailable, __init__.py's own real wiring logic must still run
+        # to completion and the base credential gate must still cover an
+        # arbitrary route -- a missing optional OIDC dependency must never
+        # silently widen to "gate is open" (this module's own stated
+        # intent).
+        _block_joserfc(monkeypatch)
+
+        app = _load_init_with_fake_server(monkeypatch)
+        app.router.add_get("/object_info", _ok_handler)
+
+        async with TestClient(TestServer(app)) as client:
+            gated = await client.get("/object_info")
+            assert gated.status == 401
+
+            login_page = await client.get(LOGIN_PATH)
+            assert login_page.status == 200
