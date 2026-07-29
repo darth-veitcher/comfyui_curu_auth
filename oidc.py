@@ -11,6 +11,17 @@ Needs only ``aiohttp`` (discovery fetch, token exchange) and ``joserfc``
 separation is what lets this module's own logic run under this repo's
 hermetic ``pytest`` suite, with no real ComfyUI process needed -- mirrors
 ``gate.py``'s own hermetic/live split.
+
+``joserfc`` is imported lazily, inside the two functions that actually use
+it, rather than at module level (issue #5). ``__init__.py`` imports this
+module unconditionally -- a missing *optional* OIDC dependency raising
+``ModuleNotFoundError`` at module-import time would therefore have taken
+the *mandatory* bearer-token gate down with it (fail-open, the opposite of
+this project's intent). With the import deferred, a pod missing
+``joserfc`` still gets the base credential gate; only an actual attempt to
+verify an ID token fails, and it fails loudly (an unhandled
+``ModuleNotFoundError`` surfaces as a 500 from that one request) rather
+than silently.
 """
 
 from __future__ import annotations
@@ -21,15 +32,15 @@ import logging
 import secrets
 import time
 from dataclasses import dataclass
-from typing import Any, NoReturn
+from typing import TYPE_CHECKING, Any, NoReturn
 from urllib.parse import urlencode
 
 import aiohttp
 from aiohttp import web
 from aiohttp.typedefs import Handler
-from joserfc import errors as jose_errors
-from joserfc import jwt
-from joserfc.jwk import KeySet
+
+if TYPE_CHECKING:
+    from joserfc.jwk import KeySet
 
 #: Same logger name gate.py's own warnings use -- fail2ban/crowdsec key
 #: off one stable, greppable format regardless of which path rejected
@@ -257,6 +268,8 @@ class OIDCTokenVerificationError(Exception):
 
 
 async def _fetch_jwks(jwks_uri: str, *, timeout: float) -> KeySet:
+    from joserfc.jwk import KeySet  # deferred -- see module docstring (issue #5)
+
     try:
         async with (
             aiohttp.ClientSession() as session,
@@ -286,6 +299,9 @@ async def verify_id_token(
     `exp` claims. Returns the verified claims on success; raises
     :class:`OIDCTokenVerificationError` for any failure.
     """
+
+    from joserfc import errors as jose_errors  # deferred -- module docstring (issue #5)
+    from joserfc import jwt
 
     key_set = await _fetch_jwks(discovery["jwks_uri"], timeout=timeout)
 
