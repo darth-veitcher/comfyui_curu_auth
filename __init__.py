@@ -94,8 +94,8 @@ if server is not None:
     _credential = resolve_persistent_credential(
         os.environ.get("COMFYUI_CURU_AUTH_TOKEN"), _state_path
     )
-    print(f"comfyui-curu-auth gate active. Credential:\n  {_credential}")
-    print(f"Browser login (paste the same credential above): {LOGIN_PATH}")
+    print(f"comfyui-curu-auth gate active. Credential:\n  {_credential}", flush=True)
+    print(f"Browser login (paste the same credential above): {LOGIN_PATH}", flush=True)
     _sessions = SessionStore()
     # One shared instance for every path -- a client backed off on one
     # (e.g. hammering the Bearer header) is backed off on the others too.
@@ -134,7 +134,7 @@ if server is not None:
     _app.router.add_post(LOGIN_PATH, _login_post)
 
     if _oidc_config is not None:
-        print(f"OIDC login also available at: {OIDC_START_PATH}")
+        print(f"OIDC login also available at: {OIDC_START_PATH}", flush=True)
         _oidc_store = AuthorizationRequestStore()
         _oidc_start, _oidc_callback = build_oidc_routes(
             _oidc_config,
