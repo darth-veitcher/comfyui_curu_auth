@@ -33,6 +33,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- The credential-announcement `print()` calls in `__init__.py` (the
+  active-credential line and, when OIDC is configured, the OIDC-login-URL
+  line) now pass `flush=True`. Real ComfyUI replaces `sys.stdout` with its
+  own `LogInterceptor` (`app/logger.py`), a plain, block-buffered
+  `io.TextIOWrapper` that does **not** preserve `PYTHONUNBUFFERED=1`'s
+  unbuffered/write-through behavior — a bare `print()` after that swap
+  could sit in that wrapper's internal buffer indefinitely and never reach
+  captured process/container logs, confirmed live (never appeared even
+  after 30+ real requests and a full graceful shutdown). Any external tool
+  that reads the credential back out of process logs — an operator running
+  `docker logs`, or `curu`'s own SSH-based credential-scraping provisioning
+  step (`darth-veitcher/curu#216`) — could race this and see nothing, or
+  see a stale line from an earlier run.
 - Login page countdown now anchors to a real deadline instead of
   decrementing per tick, so it stays accurate regardless of tab throttling.
 - `pytest`'s own `Package.setup()` unconditionally imports every

@@ -74,6 +74,62 @@ class TestHarnessBootsAndGateEnforces:
                 assert authenticated_response.status == 200
 
 
+class TestCredentialAnnouncementReachesContainerLogs:
+    """Regression witness for darth-veitcher/curu#216 (2026-08-04 rediscovery)
+    and darth-veitcher/comfyui_curu_auth#<issue> -- ``__init__.py`` announces
+    the resolved Bearer credential via plain ``print()`` immediately after
+    ``resolve_persistent_credential()`` runs. External tooling that depends
+    on that text actually reaching captured process/container output --
+    this repo's own README/contrib fail2ban/crowdsec docs, an operator
+    reading ``docker logs``, and curu's own SSH-based
+    ``activate_auth_gate_and_get_credential`` -- all read it from there.
+
+    Real ComfyUI (verified directly in ``app/logger.py``, this exact pinned
+    version) replaces ``sys.stdout`` with ``LogInterceptor``, a plain
+    ``io.TextIOWrapper`` built without ``write_through=True`` -- silently
+    reverting ``PYTHONUNBUFFERED=1``'s own unbuffered guarantee for anything
+    written through the new wrapper. A bare ``print()`` (no ``flush=True``)
+    can sit in that wrapper's internal buffer indefinitely: confirmed live
+    against this exact harness before this fix, the credential line never
+    reached ``docker compose logs`` even after 30+ real authenticated/
+    unauthenticated HTTP requests and a full graceful (SIGTERM) container
+    shutdown -- ``logging``-module output (this file's own ``_logger.
+    warning`` calls included) was unaffected, since ``logging.
+    StreamHandler.emit`` flushes after every record regardless. ``__init__.
+    py``'s two ``print(..., flush=True)`` calls are the fix: confirmed live
+    that ``flush=True`` forces an explicit flush all the way through
+    ``LogInterceptor.flush()`` (which does correctly forward to the real
+    underlying stream) to captured container output.
+
+    Deliberately checks ``docker compose logs`` (real captured container
+    output), not a mock of ``print`` or of ``sys.stdout`` -- a hermetic unit
+    test of ``__init__.py`` in isolation cannot observe this bug at all,
+    since it never runs under a real ComfyUI process's own stdout
+    replacement.
+    """
+
+    async def test_credential_announcement_reaches_container_logs(
+        self, running_harness: str
+    ) -> None:
+        # By the time `running_harness` yields, wait_until_reachable already
+        # proved the gate is enforcing (an authenticated request succeeded)
+        # -- meaning __init__.py's whole wiring block, including both
+        # print() calls, already ran. This only asserts that output actually
+        # reached captured container logs, not that the gate itself works
+        # (already covered by TestHarnessBootsAndGateEnforces).
+        logs_result = compose("logs", "comfyui", timeout=30)
+        assert logs_result.returncode == 0, logs_result.stderr
+        combined_output = logs_result.stdout + logs_result.stderr
+        assert "comfyui-curu-auth gate active. Credential:" in combined_output, (
+            "the credential-announcement print() never reached captured "
+            "container logs -- see darth-veitcher/curu#216"
+        )
+        assert (
+            f"Browser login (paste the same credential above): {LOGIN_PATH}"
+            in combined_output
+        )
+
+
 class TestWebsocketHandshakeIsGated:
     """Witness: feature scenario "The websocket handshake is gated too"
     (spec.md US2, Acceptance Scenario 1's /ws-specific claim)."""
