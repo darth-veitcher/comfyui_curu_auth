@@ -84,8 +84,17 @@ a growing `Retry-After` (1s → 2s → 4s → ... capped at 5 minutes),
 resetting on a correct attempt. The login page's own countdown updates
 live client-side — no refreshing to see if you can try again yet.
 
+Only a request that actually **offered** a credential and got it wrong
+counts. A request with no `Authorization` header, no session cookie, and
+no token in the login form tested nothing, so it never consumes the
+backoff budget — it still gets its `401` and still writes the log line
+below, but a health check or readiness probe polling unauthenticated can
+no longer lock out the legitimate client that shares its address. Anything
+non-blank does count, however malformed, so this is not a way around the
+backoff: to test a credential you have to send one.
+
 The credential itself (256 bits of entropy) is already computationally
-infeasible to brute-force — this bounds the noise a scanner can generate
+infeasible to brute-force — this bounds the guessing a scanner can do
 against either path, nothing more. An already-established browser session
 is never affected by backoff accrued elsewhere.
 

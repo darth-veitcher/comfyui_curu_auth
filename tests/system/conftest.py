@@ -161,23 +161,29 @@ async def wait_until_reachable(timeout: float = 180.0, interval: float = 2.0) ->
     until it answers with *any* HTTP response, or raise after ``timeout``.
     Returns the elapsed time in seconds.
 
-    Deliberately authenticates rather than polling unauthenticated: every
-    unauthenticated request -- including polling/health-probe traffic --
-    counts as a failure against ``gate.py``'s ``RateLimiter`` (discovered
-    live: an unauthenticated polling loop puts its own client key into a
-    blocked state after its first "successful" 401, so a test's very next
-    request gets 429 instead of the 401 it expects). Authenticating here
-    means a) this helper still detects reachability regardless of whether
-    the gate is even wired up (a 200 either way), and b) `record_success`
+    Deliberately authenticates rather than polling unauthenticated. That
+    was originally a workaround: every unauthenticated request, polling
+    included, used to count as a failure against ``gate.py``'s
+    ``RateLimiter``, so this loop put its own client key into a blocked
+    state after its first "successful" 401 and a test's very next request
+    got 429 instead of the 401 it expected. The gate no longer does that
+    (it records a failure only for a request that actually offered a
+    credential and got it wrong -- ``build_gate_middleware``'s own
+    docstring), so the workaround is no longer load-bearing.
+
+    It is kept because it is the right thing to do on its own merits:
+    a) this helper still detects reachability regardless of whether the
+    gate is even wired up (a 200 either way), and b) `record_success`
     clears any prior failure count for this client key, so the caller's
-    own subsequent assertions start from a clean rate-limiter state rather
-    than inheriting pollution from this helper's own polling.
+    own subsequent assertions start from a clean rate-limiter state
+    whatever else ran before them.
 
     This helper only answers "is the port up and speaking HTTP yet" -- gate
     correctness itself is asserted explicitly by the tests that call it.
     Contrast with ``docker/comfyui/healthcheck.py``, which polls
     unauthenticated on purpose (it exists specifically to prove the gate
-    rejects that) and accordingly treats 429 as healthy too, not just 401.
+    rejects that) and, now that such a probe can no longer rate-limit
+    itself, accepts only 401 as healthy.
 
     Polling, not sleeping-and-hoping, so the bound is on actual readiness,
     not a guessed sleep duration. 180s default matches SC-001's revised,
