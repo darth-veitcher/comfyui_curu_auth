@@ -590,6 +590,331 @@ class TestOfferingNoCredentialIsNotAFailedAttempt:
         )
 
 
+class TestAStaleSessionCookieIsExpiredNotReplayedForever:
+    """A ``curu_auth`` cookie the current :class:`SessionStore` cannot
+    recognise must be *expired* by the very response that rejects it, so
+    the client stops sending it.
+
+    :class:`SessionStore` is in-memory and starts empty on every ComfyUI
+    restart -- which curu performs routinely -- while the browser's cookie
+    survives, with a 30-day ``max_age``
+    (:data:`COOKIE_MAX_AGE_SECONDS`). Nothing told the browser otherwise,
+    so an already-open ComfyUI tab replays that now-dead cookie on every
+    request it makes, forever. Measured live against this repo's own
+    docker harness (a real ComfyUI v0.27.0 + a real Chromium): a logged-in
+    ComfyUI page load fires 253 HTTP requests in 3.5s, and the frontend's
+    own websocket client re-opens ``/ws`` every 300ms indefinitely once
+    the connection drops (``setTimeout(() => createSocket(true), 300)`` in
+    its shipped bundle) -- each handshake carrying the dead cookie.
+
+    Every one of those is an *offered* credential under ADR-004, and
+    rightly so: a cookie value the store does not hold is a wrong
+    credential, and exempting it wholesale would remove any bound on
+    guessing session tokens. So each one that lands after the previous
+    block expires charges another failure, doubling the backoff, until it
+    pins at ``max_delay`` (300s) and is renewed indefinitely by a tab
+    nobody realises is doing it. The client key that tab shares is then
+    locked out of *everything* -- ``__init__.py`` hands one
+    :class:`RateLimiter` to the gate middleware, the login form and the
+    OIDC routes alike, so the human is locked out of the very form they
+    would use to recover, and any correctly-credentialled API client on
+    that key gets 429 too. Reproduced live: an untouched post-restart tab
+    made an unauthenticated readiness poll from the same host answer 429.
+
+    The fix is deliberately *not* a change to what counts as an attempt --
+    ADR-004's rule is untouched and pinned below. It removes the storm at
+    its source instead: the first rejection expires the cookie, the client
+    stops replaying it, and there is no second request to charge. Verified
+    in a real Chromium that a ``Set-Cookie`` expiry is honoured even on the
+    401 that rejects a *websocket handshake*, which is where the storm
+    actually lives.
+    """
+
+    async def test_a_page_load_after_a_restart_no_longer_locks_the_client_out(
+        self,
+    ) -> None:
+        # The incident, end to end, through a real cookie jar: a session
+        # issued before a restart, a fresh (empty) store after it, then a
+        # page-load's worth of requests -- 253, the measured figure -- from
+        # a client that honours `Set-Cookie` exactly like a browser does.
+        # Then the legitimate, correctly-credentialled request that must
+        # still be served.
+        #
+        # `base_delay` is scaled down purely to keep the test fast: the
+        # escalation is driven by wall-clock time, not request count (a
+        # simultaneous burst charges only one failure -- the rest are
+        # already blocked), so a realistic retry cadence is what this
+        # replays.
+        before_restart = SessionStore()
+        stale_token = before_restart.issue()
+        after_restart = SessionStore()  # the restart: sessions do not survive
+
+        limiter = RateLimiter(base_delay=0.01, max_delay=300.0)
+        app = web.Application(
+            middlewares=[
+                build_gate_middleware(
+                    "expected-token", sessions=after_restart, rate_limiter=limiter
+                )
+            ]
+        )
+        app.router.add_get("/anything", _ok_handler)
+
+        async with TestClient(TestServer(app)) as client:
+            client.session.cookie_jar.update_cookies(
+                {COOKIE_NAME: stale_token},
+                response_url=client.make_url("/"),
+            )
+            for _ in range(253):
+                await client.get("/anything")
+                await asyncio.sleep(0.005)
+
+            served = await client.get(
+                "/anything", headers={"Authorization": "Bearer expected-token"}
+            )
+            assert served.status == 200
+
+    async def test_the_rejecting_response_expires_the_unrecognised_cookie(
+        self,
+    ) -> None:
+        # The mechanism, on its own and with no timing in it at all: one
+        # request, and the client's own cookie jar has dropped the cookie
+        # afterwards. Asserted through a real `aiohttp` cookie jar rather
+        # than by string-matching a `Set-Cookie` header, so the test can
+        # only pass if the expiry is one a real client actually acts on --
+        # confirmed separately against a real Chromium, including on a
+        # rejected `/ws` handshake.
+        before_restart = SessionStore()
+        stale_token = before_restart.issue()
+        after_restart = SessionStore()
+
+        app = web.Application(
+            middlewares=[
+                build_gate_middleware("expected-token", sessions=after_restart)
+            ]
+        )
+        app.router.add_get("/anything", _ok_handler)
+
+        async with TestClient(TestServer(app)) as client:
+            client.session.cookie_jar.update_cookies(
+                {COOKIE_NAME: stale_token},
+                response_url=client.make_url("/"),
+            )
+            assert COOKIE_NAME in {cookie.key for cookie in client.session.cookie_jar}
+
+            rejected = await client.get("/anything")
+            assert rejected.status == 401
+            assert await rejected.json() == {"detail": "missing or invalid credential"}
+            assert COOKIE_NAME not in {
+                cookie.key for cookie in client.session.cookie_jar
+            }
+
+    async def test_an_already_rate_limited_response_expires_it_too(self) -> None:
+        # The branch that matters most for actually stopping the storm.
+        # Once the first rejection has started a block, *every* later
+        # request from that key returns 429 ahead of the credential check,
+        # so if only the 401 branch expired the cookie the browser would
+        # keep replaying it for the whole block and re-arm the backoff the
+        # instant it lapsed.
+        before_restart = SessionStore()
+        stale_token = before_restart.issue()
+        after_restart = SessionStore()
+
+        limiter = RateLimiter(base_delay=60.0, max_delay=300.0)
+        limiter.record_failure("127.0.0.1")  # already blocked before we arrive
+        app = web.Application(
+            middlewares=[
+                build_gate_middleware(
+                    "expected-token", sessions=after_restart, rate_limiter=limiter
+                )
+            ]
+        )
+        app.router.add_get("/anything", _ok_handler)
+
+        async with TestClient(TestServer(app)) as client:
+            client.session.cookie_jar.update_cookies(
+                {COOKIE_NAME: stale_token},
+                response_url=client.make_url("/"),
+            )
+            blocked = await client.get("/anything")
+            assert blocked.status == 429
+            assert COOKIE_NAME not in {
+                cookie.key for cookie in client.session.cookie_jar
+            }
+
+    async def test_a_browser_redirect_to_the_login_form_expires_it_too(self) -> None:
+        # `Accept: text/html` rejections never reach the JSON branch --
+        # they raise a 302 to LOGIN_PATH. A human whose tab was open across
+        # the restart hits exactly this path, and must arrive at the login
+        # form with the dead cookie already gone rather than still holding
+        # one that will keep charging failures against the shared limiter
+        # they are about to POST to.
+        before_restart = SessionStore()
+        stale_token = before_restart.issue()
+        after_restart = SessionStore()
+
+        app = web.Application(
+            middlewares=[
+                build_gate_middleware("expected-token", sessions=after_restart)
+            ]
+        )
+        app.router.add_get("/anything", _ok_handler)
+
+        async with TestClient(TestServer(app)) as client:
+            client.session.cookie_jar.update_cookies(
+                {COOKIE_NAME: stale_token},
+                response_url=client.make_url("/"),
+            )
+            redirected = await client.get(
+                "/anything", headers={"Accept": "text/html"}, allow_redirects=False
+            )
+            assert redirected.status == 302
+            assert redirected.headers["Location"] == LOGIN_PATH
+            assert COOKIE_NAME not in {
+                cookie.key for cookie in client.session.cookie_jar
+            }
+
+    async def test_a_rate_limited_browser_redirect_expires_it_too(self) -> None:
+        before_restart = SessionStore()
+        stale_token = before_restart.issue()
+        after_restart = SessionStore()
+
+        limiter = RateLimiter(base_delay=60.0, max_delay=300.0)
+        limiter.record_failure("127.0.0.1")
+        app = web.Application(
+            middlewares=[
+                build_gate_middleware(
+                    "expected-token", sessions=after_restart, rate_limiter=limiter
+                )
+            ]
+        )
+        app.router.add_get("/anything", _ok_handler)
+
+        async with TestClient(TestServer(app)) as client:
+            client.session.cookie_jar.update_cookies(
+                {COOKIE_NAME: stale_token},
+                response_url=client.make_url("/"),
+            )
+            redirected = await client.get(
+                "/anything", headers={"Accept": "text/html"}, allow_redirects=False
+            )
+            assert redirected.status == 302
+            assert redirected.headers["Location"] == LOGIN_PATH
+            assert COOKIE_NAME not in {
+                cookie.key for cookie in client.session.cookie_jar
+            }
+
+    async def test_a_valid_session_cookie_is_never_expired(self) -> None:
+        # The one thing this must never do. A recognised cookie returns
+        # before any of the rejection branches, so a live session is never
+        # touched -- and the response carries no `Set-Cookie` at all.
+        sessions = SessionStore()
+        token = sessions.issue()
+
+        app = web.Application(
+            middlewares=[build_gate_middleware("expected-token", sessions=sessions)]
+        )
+        app.router.add_get("/anything", _ok_handler)
+
+        async with TestClient(TestServer(app)) as client:
+            client.session.cookie_jar.update_cookies(
+                {COOKIE_NAME: token}, response_url=client.make_url("/")
+            )
+            served = await client.get("/anything")
+            assert served.status == 200
+            assert "Set-Cookie" not in served.headers
+            assert COOKIE_NAME in {cookie.key for cookie in client.session.cookie_jar}
+
+    async def test_a_request_carrying_no_cookie_gets_no_expiry_header(self) -> None:
+        # No cookie was offered, so there is nothing to expire -- a
+        # `Set-Cookie` on every anonymous 401 would be pure noise on the
+        # single most common rejected request there is (a health probe).
+        app = web.Application(
+            middlewares=[
+                build_gate_middleware("expected-token", sessions=SessionStore())
+            ]
+        )
+        app.router.add_get("/anything", _ok_handler)
+
+        async with TestClient(TestServer(app)) as client:
+            rejected = await client.get("/anything")
+            assert rejected.status == 401
+            assert "Set-Cookie" not in rejected.headers
+
+    async def test_cookie_auth_disabled_never_expires_anything(self) -> None:
+        # `sessions=None` disables cookie auth entirely: the gate does not
+        # read `curu_auth`, would not accept it under any value, and has no
+        # business deleting a cookie of that name it never issued and that
+        # may well belong to something else.
+        app = web.Application(middlewares=[build_gate_middleware("expected-token")])
+        app.router.add_get("/anything", _ok_handler)
+
+        async with TestClient(TestServer(app)) as client:
+            client.session.cookie_jar.update_cookies(
+                {COOKIE_NAME: "not-this-gate's-cookie"},
+                response_url=client.make_url("/"),
+            )
+            rejected = await client.get("/anything")
+            assert rejected.status == 401
+            assert "Set-Cookie" not in rejected.headers
+            assert COOKIE_NAME in {cookie.key for cookie in client.session.cookie_jar}
+
+    async def test_an_unrecognised_cookie_still_counts_as_an_attempt(self) -> None:
+        # ADR-004's rule is deliberately untouched by this fix. The *first*
+        # request bearing an unrecognised cookie is still a wrong credential
+        # and still consumes the backoff budget -- which is what keeps
+        # `SessionStore` token guessing bounded. What changes is only that
+        # a client which honours the expiry has no second request to charge.
+        limiter = RateLimiter(base_delay=60.0, max_delay=300.0)
+        app = web.Application(
+            middlewares=[
+                build_gate_middleware(
+                    "expected-token", sessions=SessionStore(), rate_limiter=limiter
+                )
+            ]
+        )
+        app.router.add_get("/anything", _ok_handler)
+
+        async with TestClient(TestServer(app)) as client:
+            client.session.cookie_jar.update_cookies(
+                {COOKIE_NAME: "never-issued-token"},
+                response_url=client.make_url("/"),
+            )
+            rejected = await client.get("/anything")
+            assert rejected.status == 401
+
+            blocked = await client.get(
+                "/anything", headers={"Authorization": "Bearer expected-token"}
+            )
+            assert blocked.status == 429
+
+    async def test_a_rejected_cookie_is_still_logged(
+        self, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        # Expiring the cookie must not make the rejection invisible to
+        # fail2ban/crowdsec, which key off this line.
+        app = web.Application(
+            middlewares=[
+                build_gate_middleware("expected-token", sessions=SessionStore())
+            ]
+        )
+        app.router.add_get("/anything", _ok_handler)
+
+        with caplog.at_level("WARNING", logger="comfyui_curu_auth"):
+            async with TestClient(TestServer(app)) as client:
+                client.session.cookie_jar.update_cookies(
+                    {COOKIE_NAME: "never-issued-token"},
+                    response_url=client.make_url("/"),
+                )
+                await client.get(
+                    "/anything", headers={"X-Forwarded-For": "203.0.113.21"}
+                )
+
+        assert any(
+            "authentication failure" in r.message and "203.0.113.21" in r.message
+            for r in caplog.records
+        )
+
+
 class TestUnauthenticatedBrowserNavigationRedirectsToLogin:
     """A human opening any gated page directly (no cookie, no header yet)
     should land on the login form, not a bare JSON 401 they'd have no way
