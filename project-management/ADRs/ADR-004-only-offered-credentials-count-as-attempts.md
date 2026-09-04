@@ -145,6 +145,12 @@ Once is bad luck; three times is a defect in the gate.
   and the `429`-alongside-`401` half of its healthcheck correction is
   withdrawn. Its core decision (require `401`, never tolerate `200`) is
   unaffected and now applies exactly.
+- Followed by
+  [ADR-005](ADR-005-expire-a-stale-session-cookie-rather-than-exempt-it.md),
+  which addresses a fourth instance of this lockout class — a session
+  cookie stranded by a restart — *without* changing this ADR's rule or its
+  "offered" table. The row for a non-blank `curu_auth` cookie still holds
+  exactly as written; that request is simply also told to stop sending it.
 - `gate.py` — `build_gate_middleware`, `build_login_routes`,
   `RateLimiter`.
 - `docker/comfyui/healthcheck.py`, `tests/system/conftest.py` — the two

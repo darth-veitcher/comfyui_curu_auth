@@ -33,6 +33,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- A `curu_auth` session cookie stranded by a ComfyUI restart no longer
+  locks its own client out. Sessions are in-memory and start empty on every
+  restart (which curu performs routinely); the browser's cookie is not, so
+  an already-open ComfyUI tab replayed a cookie that could never validate
+  again — 253 requests per page load, and a `/ws` handshake every 300ms
+  indefinitely. Each replay is an offered-and-wrong credential, so the
+  backoff escalated to its 5-minute cap after ~8.5 minutes and was then
+  renewed forever, locking that address out of the login form needed to
+  recover (one `RateLimiter` is shared by the middleware, the form and the
+  OIDC routes). The rejecting response now expires that cookie — on the
+  `401`, on an already-blocked `429`, and on each one's `Accept: text/html`
+  redirect — so the client stops replaying it and there is no second
+  request to charge. What counts as an authentication attempt is
+  deliberately unchanged: the first such request still consumes the backoff
+  budget, which is what keeps session-token guessing bounded. A *valid*
+  session cookie is never touched, and neither is a cookie of that name
+  when cookie auth is disabled.
 - A request offering **no** credential at all is no longer recorded as a
   failed authentication attempt. Previously a missing `Authorization`
   header produced `b""`, failed the constant-time comparison, and was

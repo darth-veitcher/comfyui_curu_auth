@@ -93,10 +93,19 @@ no longer lock out the legitimate client that shares its address. Anything
 non-blank does count, however malformed, so this is not a way around the
 backoff: to test a credential you have to send one.
 
+A session cookie left over from before a ComfyUI restart is a special
+case of "offered and wrong": sessions live in memory and do not survive a
+restart, but the browser's 30-day cookie does. That request still counts —
+a cookie the server does not recognise is a wrong credential — but the
+response now **expires the cookie**, so the browser stops replaying it.
+Without that, an open ComfyUI tab re-opens `/ws` every 300ms forever and
+renews the maximum backoff indefinitely, locking its own address out of
+the login form needed to recover.
+
 The credential itself (256 bits of entropy) is already computationally
 infeasible to brute-force — this bounds the guessing a scanner can do
 against either path, nothing more. An already-established browser session
-is never affected by backoff accrued elsewhere.
+is never affected by backoff accrued elsewhere, and is never expired.
 
 ## Blocking repeat offenders at the firewall
 
