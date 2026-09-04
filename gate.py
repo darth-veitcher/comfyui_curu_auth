@@ -124,6 +124,32 @@ def resolve_persistent_credential(
     return credential
 
 
+def _expire_session_cookie(response: web.StreamResponse) -> None:
+    """Tell the client to drop its :data:`COOKIE_NAME` cookie, by setting
+    the same cookie to an empty value with ``max_age=0``.
+
+    Attributes mirror the ones :func:`build_login_routes` and ``oidc.py``
+    issue it with (``httponly``/``secure``/``samesite="Strict"``, and
+    aiohttp's own default ``path="/"``) -- a browser matches a replacement
+    cookie on name/domain/path, and issuing it over the same HTTPS origin
+    with the same flags is what makes it overwrite rather than sit
+    alongside the original.
+
+    Applied only to a request that actually presented an unrecognised
+    cookie, and only where cookie auth is enabled -- see
+    :func:`build_gate_middleware`'s own docstring for why.
+    """
+
+    response.set_cookie(
+        COOKIE_NAME,
+        "",
+        max_age=0,
+        httponly=True,
+        secure=True,
+        samesite="Strict",
+    )
+
+
 def build_gate_middleware(
     credential: str,
     *,
@@ -202,6 +228,38 @@ def build_gate_middleware(
     -- an actual whitespace cookie value is a wrong credential, and
     "count it" is the safe direction to be wrong in.
 
+    A rejected request that *presented* a ``curu_auth`` cookie the
+    ``sessions`` store does not recognise gets that cookie expired on the
+    rejecting response (:func:`_expire_session_cookie`), on every one of
+    the four branches such a request can leave by: the 401, the
+    already-blocked 429, and each one's ``Accept: text/html`` redirect.
+    This is not a change to what counts as an attempt -- the rule above is
+    untouched, and that first request still consumes the budget. It
+    removes the *storm* instead.
+
+    ``SessionStore`` is in-memory and starts empty on every ComfyUI
+    restart (which curu performs routinely), while the browser's cookie
+    survives with a 30-day ``max_age``
+    (:data:`COOKIE_MAX_AGE_SECONDS`). Nothing told the browser otherwise,
+    so an already-open ComfyUI tab replayed a cookie that could never
+    validate again -- on measured evidence, 253 requests per page load and
+    a ``/ws`` handshake every 300ms indefinitely, each one an offered-and-
+    wrong credential. A burst charges only one failure (the rest are
+    already blocked), but each retry landing after the previous block
+    lapses charges another, doubling until it pins at ``max_delay`` and is
+    renewed forever by a tab nobody realises is doing it -- locking that
+    client key out of the login form the human needs to recover, since
+    ``__init__.py`` shares one limiter across the middleware, the form and
+    the OIDC routes. Expiring the cookie ends it at the source: the client
+    stops replaying, and there is no second request to charge.
+
+    Deliberately narrow. A *valid* cookie returns before any of these
+    branches and is never touched; a request that presented no cookie gets
+    no ``Set-Cookie`` at all (it would be pure noise on the most common
+    rejected request there is, an anonymous health probe); and with
+    ``sessions=None`` the gate neither reads nor expires a cookie it does
+    not own.
+
     A rejected request that also carries ``Accept: text/html`` gets a
     302 redirect to :data:`LOGIN_PATH` instead of a bare JSON error body
     (401 or, while backed off, 429) -- a human navigating directly to
@@ -253,12 +311,25 @@ def build_gate_middleware(
                     # below -- a real browser reloading a gated page
                     # while backed off has no way to act on a bare JSON
                     # body, same as an outright missing/wrong credential.
-                    raise web.HTTPFound(LOGIN_PATH)
-                return web.json_response(
+                    redirect = web.HTTPFound(LOGIN_PATH)
+                    if supplied_cookie:
+                        _expire_session_cookie(redirect)
+                    raise redirect
+                blocked = web.json_response(
                     {"detail": "too many attempts", "retry_after": seconds},
                     status=429,
                     headers={"Retry-After": str(seconds)},
                 )
+                # The branch that actually stops a stale-cookie storm.
+                # Once the first rejection has started a block, every
+                # later request from that key returns here ahead of the
+                # credential check -- so expiring the cookie only on the
+                # 401 below would leave the client replaying it for the
+                # whole block and re-arming the backoff the instant it
+                # lapsed.
+                if supplied_cookie:
+                    _expire_session_cookie(blocked)
+                return blocked
 
         supplied_header_value = request.headers.get("Authorization", "")
         supplied_header = supplied_header_value.encode("latin-1")
@@ -283,11 +354,17 @@ def build_gate_middleware(
         )
 
         if "text/html" in request.headers.get("Accept", ""):
-            raise web.HTTPFound(LOGIN_PATH)
+            redirect = web.HTTPFound(LOGIN_PATH)
+            if supplied_cookie:
+                _expire_session_cookie(redirect)
+            raise redirect
 
-        return web.json_response(
+        rejected = web.json_response(
             {"detail": "missing or invalid credential"}, status=401
         )
+        if supplied_cookie:
+            _expire_session_cookie(rejected)
+        return rejected
 
     return gate
 

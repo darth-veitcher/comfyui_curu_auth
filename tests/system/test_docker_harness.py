@@ -226,6 +226,23 @@ class TestTeardownAndRestartLeavesNoStaleState:
                 assert stale_cookie_response.status == 401, (
                     "old session cookie was still accepted after restart"
                 )
+                # ...and the rejection tells the client to drop it, against
+                # the real stack (ADR-005). Without this a browser that was
+                # logged in before the restart replays a cookie that can
+                # never validate again -- 253 requests per page load and a
+                # `/ws` handshake every 300ms -- charging a failure each
+                # time the previous block lapses until it pins at the
+                # 5-minute cap and renews it indefinitely, locking its own
+                # address out of the login form needed to recover.
+                expiries = [
+                    value
+                    for value in stale_cookie_response.headers.getall("Set-Cookie", [])
+                    if value.startswith("curu_auth=") and "Max-Age=0" in value
+                ]
+                assert expiries, (
+                    "stale session cookie was rejected but not expired: "
+                    f"{stale_cookie_response.headers.getall('Set-Cookie', [])}"
+                )
 
             async with session.get(
                 BASE_URL, headers=blocked_client
