@@ -344,6 +344,252 @@ class TestBearerAuthIsRateLimited:
             assert response.status == 200
 
 
+class TestOfferingNoCredentialIsNotAFailedAttempt:
+    """A request carrying *no* credential at all is not an authentication
+    *attempt* -- it tested nothing -- so it must not consume the backoff
+    budget, even though it is (still, unchanged) rejected with a 401.
+
+    This is the fix for a defect that produced the same incident three
+    separate times and was worked around twice: an unauthenticated
+    readiness/health probe repeated every few seconds accrues escalating
+    backoff (`base_delay=1.0`, `max_delay=300.0`) exactly as if it were
+    guessing credentials, and the *next* correctly-credentialled request
+    -- from an entirely legitimate client sharing that client key -- gets
+    429 instead of being served. `docker/comfyui/healthcheck.py` had to
+    accept 429 as proof-of-gate because of it; curu's own system-test
+    harness had ~30 unauthenticated readiness polls turn its first real
+    `POST /prompt` into a 429.
+
+    The security reasoning: a brute-forcer must *supply* a candidate
+    credential to test it, so counting only supplied-and-wrong attempts
+    still bounds exactly the attempts that could ever succeed. Offering
+    nothing tests nothing. What counts as "offered" is deliberately as
+    wide as possible short of that -- see the individual tests below: a
+    malformed header, a non-Bearer scheme, and a never-issued session
+    cookie all count, so the exemption can never be turned into an
+    unlimited supply of free guesses.
+    """
+
+    async def test_credential_less_requests_never_consume_the_failure_budget(
+        self,
+    ) -> None:
+        # The real incident, reproduced: a readiness probe polling an
+        # unauthenticated endpoint during boot, then the first real
+        # credentialled request. Production defaults deliberately -- the
+        # bug needs no exotic tuning to bite.
+        limiter = RateLimiter(base_delay=1.0, max_delay=300.0)
+        app = web.Application(
+            middlewares=[build_gate_middleware("expected-token", rate_limiter=limiter)]
+        )
+        app.router.add_get("/anything", _ok_handler)
+
+        async with TestClient(TestServer(app)) as client:
+            for _ in range(30):
+                probe = await client.get("/anything")
+                assert probe.status == 401
+
+            served = await client.get(
+                "/anything", headers={"Authorization": "Bearer expected-token"}
+            )
+            assert served.status == 200
+
+    async def test_a_credential_less_request_is_still_rejected_with_401(self) -> None:
+        # Not recording a failure must not soften the rejection itself --
+        # the 401 and its body are unchanged.
+        limiter = RateLimiter(base_delay=1.0, max_delay=300.0)
+        app = web.Application(
+            middlewares=[build_gate_middleware("expected-token", rate_limiter=limiter)]
+        )
+        app.router.add_get("/anything", _ok_handler)
+
+        async with TestClient(TestServer(app)) as client:
+            response = await client.get("/anything")
+            assert response.status == 401
+            assert await response.json() == {"detail": "missing or invalid credential"}
+
+    async def test_a_credential_less_browser_request_still_redirects_to_login(
+        self,
+    ) -> None:
+        # The 401 branch's existing content negotiation is untouched.
+        limiter = RateLimiter(base_delay=1.0, max_delay=300.0)
+        app = web.Application(
+            middlewares=[build_gate_middleware("expected-token", rate_limiter=limiter)]
+        )
+        app.router.add_get("/anything", _ok_handler)
+
+        async with TestClient(TestServer(app)) as client:
+            response = await client.get(
+                "/anything",
+                headers={"Accept": "text/html"},
+                allow_redirects=False,
+            )
+            assert response.status == 302
+            assert response.headers["Location"] == LOGIN_PATH
+
+    async def test_an_empty_authorization_header_is_not_an_attempt_either(self) -> None:
+        # `Authorization:` with a blank value carries no candidate
+        # credential -- it can never equal `Bearer <credential>`, so it
+        # tests nothing, exactly like sending no header at all. Treating
+        # it as an attempt would let a proxy or client that emits a blank
+        # header lock a legitimate caller out for free.
+        limiter = RateLimiter(base_delay=1.0, max_delay=300.0)
+        app = web.Application(
+            middlewares=[build_gate_middleware("expected-token", rate_limiter=limiter)]
+        )
+        app.router.add_get("/anything", _ok_handler)
+
+        async with TestClient(TestServer(app)) as client:
+            blank = await client.get("/anything", headers={"Authorization": ""})
+            assert blank.status == 401
+
+            served = await client.get(
+                "/anything", headers={"Authorization": "Bearer expected-token"}
+            )
+            assert served.status == 200
+
+    async def test_a_whitespace_only_authorization_header_is_not_an_attempt(
+        self,
+    ) -> None:
+        # Driven against the middleware directly, with a mocked request,
+        # rather than through a real client: aiohttp's own HTTP parser
+        # strips optional whitespace around a header value, so a
+        # whitespace-only `Authorization` never survives the wire as
+        # anything but "". The rule this pins belongs to the middleware,
+        # not to that parser -- a client or proxy emitting
+        # `Authorization: " "` offered no candidate credential either.
+        limiter = RateLimiter(base_delay=60.0, max_delay=300.0)
+        gate = build_gate_middleware("expected-token", rate_limiter=limiter)
+        request = make_mocked_request(
+            "GET",
+            "/anything",
+            headers={"Authorization": "   ", "X-Forwarded-For": "203.0.113.13"},
+        )
+
+        response = await gate(request, _ok_handler)
+
+        assert response.status == 401
+        assert limiter.seconds_until_retry("203.0.113.13") == 0.0
+
+    async def test_a_wrong_credential_still_consumes_the_failure_budget(self) -> None:
+        # The control: a *supplied* and wrong credential is exactly the
+        # attempt the limiter exists to bound, and is unaffected.
+        limiter = RateLimiter(base_delay=60.0, max_delay=300.0)
+        app = web.Application(
+            middlewares=[build_gate_middleware("expected-token", rate_limiter=limiter)]
+        )
+        app.router.add_get("/anything", _ok_handler)
+
+        async with TestClient(TestServer(app)) as client:
+            wrong = await client.get(
+                "/anything", headers={"Authorization": "Bearer wrong-token"}
+            )
+            assert wrong.status == 401
+
+            blocked = await client.get(
+                "/anything", headers={"Authorization": "Bearer expected-token"}
+            )
+            assert blocked.status == 429
+
+    async def test_a_malformed_authorization_header_still_counts_as_an_attempt(
+        self,
+    ) -> None:
+        # "Offered" must not mean "well-formed": if malformed headers were
+        # exempt, a client could hand over an unlimited number of free
+        # attempts simply by malforming them. Anything non-blank in the
+        # header is a candidate credential, however unlikely.
+        limiter = RateLimiter(base_delay=60.0, max_delay=300.0)
+        app = web.Application(
+            middlewares=[build_gate_middleware("expected-token", rate_limiter=limiter)]
+        )
+        app.router.add_get("/anything", _ok_handler)
+
+        async with TestClient(TestServer(app)) as client:
+            malformed = await client.get(
+                "/anything", headers={"Authorization": "Basic bm90LWEtYmVhcmVy"}
+            )
+            assert malformed.status == 401
+
+            blocked = await client.get(
+                "/anything", headers={"Authorization": "Bearer expected-token"}
+            )
+            assert blocked.status == 429
+
+    async def test_a_bare_scheme_with_no_token_still_counts_as_an_attempt(self) -> None:
+        limiter = RateLimiter(base_delay=60.0, max_delay=300.0)
+        app = web.Application(
+            middlewares=[build_gate_middleware("expected-token", rate_limiter=limiter)]
+        )
+        app.router.add_get("/anything", _ok_handler)
+
+        async with TestClient(TestServer(app)) as client:
+            bare = await client.get("/anything", headers={"Authorization": "Bearer"})
+            assert bare.status == 401
+
+            blocked = await client.get(
+                "/anything", headers={"Authorization": "Bearer expected-token"}
+            )
+            assert blocked.status == 429
+
+    async def test_a_never_issued_session_cookie_still_counts_as_an_attempt(
+        self,
+    ) -> None:
+        # The session cookie is the gate's *other* accepted credential
+        # (256 bits, minted by SessionStore). A request presenting one
+        # that was never issued has offered a credential and been wrong,
+        # so it must stay counted -- keying the exemption on the
+        # Authorization header alone would silently hand an attacker
+        # unlimited free guesses at session tokens.
+        limiter = RateLimiter(base_delay=60.0, max_delay=300.0)
+        sessions = SessionStore()
+        app = web.Application(
+            middlewares=[
+                build_gate_middleware(
+                    "expected-token", sessions=sessions, rate_limiter=limiter
+                )
+            ]
+        )
+        app.router.add_get("/anything", _ok_handler)
+
+        async with TestClient(TestServer(app)) as client:
+            client.session.cookie_jar.update_cookies(
+                {COOKIE_NAME: "never-issued-token"},
+                response_url=client.make_url("/"),
+            )
+            rejected = await client.get("/anything")
+            assert rejected.status == 401
+
+            client.session.cookie_jar.clear()
+            blocked = await client.get(
+                "/anything", headers={"Authorization": "Bearer expected-token"}
+            )
+            assert blocked.status == 429
+
+    async def test_a_credential_less_request_is_still_logged(
+        self, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        # Logging is a separate concern from blocking (see
+        # TestFailedBearerAuthIsLogged) -- fail2ban/crowdsec key off these
+        # lines to block at the network level, which is the real defence
+        # against an unauthenticated flood. Not consuming the *backoff*
+        # budget must not make the request invisible to them.
+        limiter = RateLimiter(base_delay=1.0, max_delay=300.0)
+        app = web.Application(
+            middlewares=[build_gate_middleware("expected-token", rate_limiter=limiter)]
+        )
+        app.router.add_get("/anything", _ok_handler)
+
+        with caplog.at_level("WARNING", logger="comfyui_curu_auth"):
+            async with TestClient(TestServer(app)) as client:
+                await client.get(
+                    "/anything", headers={"X-Forwarded-For": "203.0.113.11"}
+                )
+
+        assert any(
+            "authentication failure" in r.message and "203.0.113.11" in r.message
+            for r in caplog.records
+        )
+
+
 class TestUnauthenticatedBrowserNavigationRedirectsToLogin:
     """A human opening any gated page directly (no cookie, no header yet)
     should land on the login form, not a bare JSON 401 they'd have no way
@@ -770,6 +1016,108 @@ class TestLoginSubmissionIsRateLimited:
 
             script = body.split("<script>", 1)[1]
             assert "Date.now()" in script
+
+
+class TestLoginSubmissionWithNoTokenIsNotAnAttempt:
+    """`build_login_routes` has the same defect shape the Bearer-header
+    path did: a POST whose `token` field is missing or blank offered no
+    credential, tested nothing, and must not consume the backoff budget
+    -- while still being rejected exactly as before. A human hitting
+    Enter on the empty form (or any bot POSTing empty bodies) otherwise
+    locks out the shared `RateLimiter` that `__init__.py` hands to the
+    gate middleware, this form, *and* the OIDC routes alike."""
+
+    async def test_an_empty_token_submission_never_consumes_the_budget(self) -> None:
+        limiter = RateLimiter(base_delay=1.0, max_delay=300.0)
+        app = _app_with_login("expected-token", rate_limiter=limiter)
+
+        async with TestClient(TestServer(app)) as client:
+            for _ in range(10):
+                empty = await client.post(LOGIN_PATH, data={"token": ""})
+                assert empty.status == 401
+
+            accepted = await client.post(
+                LOGIN_PATH, data={"token": "expected-token"}, allow_redirects=False
+            )
+            assert accepted.status == 302
+
+    async def test_a_submission_with_no_token_field_at_all_is_not_an_attempt(
+        self,
+    ) -> None:
+        limiter = RateLimiter(base_delay=1.0, max_delay=300.0)
+        app = _app_with_login("expected-token", rate_limiter=limiter)
+
+        async with TestClient(TestServer(app)) as client:
+            missing = await client.post(LOGIN_PATH, data={"username": "curu"})
+            assert missing.status == 401
+
+            accepted = await client.post(
+                LOGIN_PATH, data={"token": "expected-token"}, allow_redirects=False
+            )
+            assert accepted.status == 302
+
+    async def test_an_empty_token_submission_still_renders_the_401_login_page(
+        self,
+    ) -> None:
+        limiter = RateLimiter(base_delay=1.0, max_delay=300.0)
+        app = _app_with_login("expected-token", rate_limiter=limiter)
+
+        async with TestClient(TestServer(app)) as client:
+            response = await client.post(LOGIN_PATH, data={"token": ""})
+            assert response.status == 401
+            assert "text/html" in response.headers["Content-Type"]
+            assert "Incorrect credential." in await response.text()
+            assert "Set-Cookie" not in response.headers
+
+    async def test_a_whitespace_only_token_submission_is_not_an_attempt(self) -> None:
+        # Unlike a header value (aiohttp's HTTP parser strips optional
+        # whitespace around those), a form field's whitespace survives
+        # intact -- `token=%20%20%20` really does arrive as "   ". Still
+        # nothing offered.
+        limiter = RateLimiter(base_delay=1.0, max_delay=300.0)
+        app = _app_with_login("expected-token", rate_limiter=limiter)
+
+        async with TestClient(TestServer(app)) as client:
+            blank = await client.post(LOGIN_PATH, data={"token": "   "})
+            assert blank.status == 401
+
+            accepted = await client.post(
+                LOGIN_PATH, data={"token": "expected-token"}, allow_redirects=False
+            )
+            assert accepted.status == 302
+
+    async def test_a_wrong_token_still_consumes_the_budget(self) -> None:
+        # The control: a supplied, wrong token is the attempt this
+        # limiter exists to bound (already covered by
+        # TestLoginSubmissionIsRateLimited -- restated here so the
+        # exemption above can never quietly widen to cover it).
+        limiter = RateLimiter(base_delay=60.0, max_delay=300.0)
+        app = _app_with_login("expected-token", rate_limiter=limiter)
+
+        async with TestClient(TestServer(app)) as client:
+            wrong = await client.post(LOGIN_PATH, data={"token": "wrong-token"})
+            assert wrong.status == 401
+
+            blocked = await client.post(LOGIN_PATH, data={"token": "expected-token"})
+            assert blocked.status == 429
+
+    async def test_a_token_that_encodes_to_nothing_still_counts_as_an_attempt(
+        self,
+    ) -> None:
+        # `errors="ignore"` drops every non-latin-1 character, so a token
+        # of nothing but such characters encodes to `b""` -- which the
+        # handler already had to reject as "not supplied". That must not
+        # become the loophole: the *submitted* value was non-blank, so a
+        # credential was offered and was wrong.
+        limiter = RateLimiter(base_delay=60.0, max_delay=300.0)
+        app = _app_with_login("expected-token", rate_limiter=limiter)
+
+        async with TestClient(TestServer(app)) as client:
+            unencodable = await client.post(LOGIN_PATH, data={"token": "中文"})
+            assert unencodable.status == 401
+
+            blocked = await client.post(LOGIN_PATH, data={"token": "expected-token"})
+            assert blocked.status == 429
 
 
 class _FakeTransport:
