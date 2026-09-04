@@ -1,0 +1,69 @@
+# Cut a release from conventional commits, on every merge to main.
+#
+# WHY THIS IS AUTOMATIC WHEN THE SIBLINGS RELEASE BY HAND. curu-infra releases
+# from a local `just release` because its release PUBLISHES TO PyPI, and doing
+# that from Actions broke (its issue #140) leaving `main` tagged at a version
+# that did not exist on PyPI. None of that applies here: this project builds no
+# wheel and publishes to no index (`[tool.uv] package = false`). A release here
+# is a tag, a CHANGELOG entry and a GitHub Release -- all of which Actions does
+# with the job's own GITHUB_TOKEN and no secret to configure or leak.
+#
+# AND IT HAS TO BE AUTOMATIC TO BE WORTH ANYTHING. The whole reason this file
+# exists is that ten merged PRs -- including two real gate fixes on 2026-09-04 --
+# left the version reading `0.1.0`, so consumers that wanted to pin this node had
+# no version to pin to and tracked the default branch instead. A release step
+# that depends on somebody remembering to run it reproduces that exact outcome.
+#
+# WHAT IT DOES NOT DO. It does not rebuild or republish any downstream image.
+# curu-infra's `comfy-image.yml` stays `workflow_dispatch`-only, deliberately:
+# a rebuild there moves the unpinned `runpod/comfyui` base and every unpinned
+# node with it, so when pod substrate moves is the operator's call, not a
+# consequence of merging a fix here.
+
+name: release
+
+on:
+  push:
+    branches: [main]
+
+concurrency:
+  group: release
+  cancel-in-progress: false
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    permissions:
+      # PSR pushes the version commit and the tag, and creates the Release.
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # PSR decides the next version by walking commits back to the last
+          # tag. A shallow clone has neither the tags nor the history, and PSR
+          # would silently treat every run as the first release.
+          fetch-depth: 0
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - uses: astral-sh/setup-uv@v5
+
+      - name: Run the test suite
+        # The gate. A release tag is what downstream pins to, so tagging a
+        # broken commit ships it to every consumer that follows the version.
+        run: uv run pytest
+
+      # `gitpython<3.1.60` is NOT incidental. python-semantic-release 10.6.1
+      # calls `Actor.name_email_regex` (semantic_release/cli/config.py:745),
+      # which GitPython removed in 3.1.60. Unpinned, every release command dies
+      # with "type object 'Actor' has no attribute 'name_email_regex'" -- an
+      # internal traceback naming neither package. curu-infra lost two merged
+      # PRs to this before pinning it in its own justfile; inherited here rather
+      # than rediscovered.
+      - name: Release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          uvx --from python-semantic-release --with 'gitpython<3.1.60' \
+            semantic-release version
