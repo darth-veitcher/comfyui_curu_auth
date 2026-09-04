@@ -1,6 +1,6 @@
 [project]
 name = "comfyui_curu_auth"
-version = "0.1.0"
+version = "1.0.0"
 description = "Standalone ComfyUI custom node that gates a ComfyUI backend behind a bearer-token credential -- covers every route ComfyUI serves, including the /ws websocket handshake its own progress streaming depends on."
 readme = "README.md"
 requires-python = ">=3.12"
