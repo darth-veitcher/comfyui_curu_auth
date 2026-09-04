@@ -673,6 +673,53 @@ class TestAStaleSessionCookieIsExpiredNotReplayedForever:
             )
             assert served.status == 200
 
+    async def test_the_expiry_carries_the_same_attributes_it_was_issued_with(
+        self,
+    ) -> None:
+        # Added after mutation testing: replacing `secure=True` /
+        # `samesite="Strict"` on the expiry with `False`/`"Lax"` left the
+        # whole suite green, because neither a browser nor `aiohttp`'s own
+        # jar matches a replacement cookie on those flags -- they match on
+        # name/domain/path. They still have to be right, for two reasons a
+        # cookie-jar assertion cannot see: a browser refuses to let a
+        # non-`Secure` cookie overwrite a `Secure` one from a non-secure
+        # origin ("Leave Secure Cookies Alone"), and a rejection response
+        # must never be the one place this gate emits a weaker cookie than
+        # the login form issues. Pinned against the header the client
+        # actually receives, not against `set_cookie`'s arguments.
+        before_restart = SessionStore()
+        stale_token = before_restart.issue()
+        after_restart = SessionStore()
+
+        app = web.Application(
+            middlewares=[
+                build_gate_middleware("expected-token", sessions=after_restart)
+            ]
+        )
+        app.router.add_get("/anything", _ok_handler)
+
+        async with TestClient(TestServer(app)) as client:
+            client.session.cookie_jar.update_cookies(
+                {COOKIE_NAME: stale_token},
+                response_url=client.make_url("/"),
+            )
+            rejected = await client.get("/anything")
+
+            set_cookie = [
+                value
+                for value in rejected.headers.getall("Set-Cookie")
+                if value.startswith(f"{COOKIE_NAME}=")
+            ]
+            assert len(set_cookie) == 1
+            attributes = {part.strip() for part in set_cookie[0].split(";")[1:]}
+            assert attributes == {
+                "HttpOnly",
+                "Max-Age=0",
+                "Path=/",
+                "SameSite=Strict",
+                "Secure",
+            }
+
     async def test_the_rejecting_response_expires_the_unrecognised_cookie(
         self,
     ) -> None:
