@@ -405,10 +405,20 @@ def build_oidc_routes(
             # Every hit counts, not just failed logins -- this route has
             # no credential to check, so (unlike the login form) there's
             # no separate "success" outcome that would otherwise reset
-            # the count via record_success. Matches this gate's existing
-            # posture: any unauthenticated hit on a rate-limited path
-            # already counts against it (e.g. the Bearer-header path's
-            # own middleware behavior).
+            # the count via record_success.
+            #
+            # Deliberately NOT the rule gate.py's own paths follow, which
+            # count only a request that offered a credential and got it
+            # wrong (build_gate_middleware's docstring; an earlier version
+            # of this comment cited that "any unauthenticated hit counts"
+            # posture, which no longer exists). This route is different in
+            # kind: it is public by necessity, has no credential to be
+            # wrong about, and each hit makes this process perform an
+            # outbound discovery fetch against the identity provider --
+            # the cost being throttled is that fetch, not a guess. The
+            # matching relaxation is one step later instead: a `state`
+            # the callback recognises bypasses the check entirely, so a
+            # real login never pays for the failure charged here.
             rate_limiter.record_failure(key)
 
         try:

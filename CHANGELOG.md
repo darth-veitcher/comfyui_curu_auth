@@ -33,6 +33,30 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- A request offering **no** credential at all is no longer recorded as a
+  failed authentication attempt. Previously a missing `Authorization`
+  header produced `b""`, failed the constant-time comparison, and was
+  counted identically to a *wrong* credential — so a few dozen
+  credential-less requests (a health check, a readiness poll, a browser
+  page load before login) locked out any legitimate client sharing that
+  client key, via the escalating backoff. It caused the same incident at
+  least three times and was worked around twice: `docker/comfyui/`
+  `healthcheck.py` had to accept `429` as proof-of-gate, and ~30
+  unauthenticated readiness polls turned `curu`'s own system-test suite's
+  first real `POST /prompt` into a `429`. The rejection itself is
+  unchanged — same `401`, same body, same `Accept: text/html` redirect to
+  the login page, same fail2ban/crowdsec log line — only the failure
+  accounting changed. `build_login_routes` had the identical defect for a
+  POST with a blank or absent `token` field, fixed the same way. Anything
+  non-blank still counts, however malformed (a `Basic` scheme, a bare
+  `Bearer`, a never-issued session cookie, a token that encodes to `b""`),
+  so a brute-forcer gains nothing: testing a credential requires sending
+  one.
+- `docker/comfyui/healthcheck.py` now requires `401` exactly, no longer
+  accepting `429`. That acceptance existed only to tolerate the defect
+  above (its own unauthenticated probe rate-limiting itself); with the
+  cause gone, a `429` there would mean a real lockout of some other
+  client on `127.0.0.1` and must not be reported as healthy.
 - The credential-announcement `print()` calls in `__init__.py` (the
   active-credential line and, when OIDC is configured, the OIDC-login-URL
   line) now pass `flush=True`. Real ComfyUI replaces `sys.stdout` with its

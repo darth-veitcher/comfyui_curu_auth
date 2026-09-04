@@ -169,6 +169,39 @@ def build_gate_middleware(
     checked first and never touches the rate limiter at all -- it must
     never be penalised by backoff accrued on this separate path.
 
+    Only a request that actually **offered** a credential and got it
+    wrong records a failure against that limiter. A request carrying no
+    ``Authorization`` header and no ``curu_auth`` cookie tested nothing,
+    so it is not an authentication attempt -- it still gets its 401
+    (identical body, identical ``Accept: text/html`` redirect) and still
+    logs the same fail2ban/crowdsec warning line, it simply does not
+    consume the backoff budget. Treating it as a failure produced the
+    same incident at least three times: an unauthenticated readiness or
+    health probe repeated every few seconds accrues escalating backoff
+    exactly as if it were guessing credentials, and the next *legitimate,
+    correctly-credentialled* request from the same client key gets 429.
+    ``docker/comfyui/healthcheck.py`` had to accept 429 as proof-of-gate
+    to work around it, and ~30 unauthenticated readiness polls in curu's
+    own system-test harness turned that session's first real
+    ``POST /prompt`` into a 429.
+
+    This does not weaken the control it is part of: a brute-forcer must
+    *supply* a candidate credential to test it, so counting only
+    supplied-and-wrong attempts still bounds exactly the attempts that
+    could ever succeed. "Offered" is therefore deliberately as wide as
+    possible short of that -- any non-blank ``Authorization`` header
+    counts, however malformed (``Basic ...``, a bare ``Bearer``, plain
+    garbage), and so does any non-blank ``curu_auth`` cookie, since a
+    session token is the gate's other accepted credential and must not
+    become the unrated path. Only a blank or absent value is exempt, and
+    a blank value can never equal ``Bearer <credential>``, so exempting
+    it hands an attacker nothing they could not already get by sending
+    no header at all. The header's blank test tolerates whitespace (a
+    client or proxy emitting ``Authorization: " "`` offered nothing
+    either); the cookie's does not, deliberately erring toward counting
+    -- an actual whitespace cookie value is a wrong credential, and
+    "count it" is the safe direction to be wrong in.
+
     A rejected request that also carries ``Accept: text/html`` gets a
     302 redirect to :data:`LOGIN_PATH` instead of a bare JSON error body
     (401 or, while backed off, 429) -- a human navigating directly to
@@ -193,10 +226,21 @@ def build_gate_middleware(
         if request.path in resolved_public_paths:
             return await handler(request)
 
-        if sessions is not None:
-            supplied_cookie = request.cookies.get(COOKIE_NAME, "")
-            if supplied_cookie and sessions.is_valid(supplied_cookie):
-                return await handler(request)
+        # Read once, outside the validity check: a *supplied* cookie is
+        # itself an offered credential (see `credential_was_offered`
+        # below), whether or not it turns out to be valid. Only read at
+        # all when `sessions` is not None -- with cookie auth disabled the
+        # gate would never accept this cookie under any value, so
+        # presenting one cannot be an authentication attempt.
+        supplied_cookie = (
+            request.cookies.get(COOKIE_NAME, "") if sessions is not None else ""
+        )
+        if (
+            supplied_cookie
+            and sessions is not None
+            and sessions.is_valid(supplied_cookie)
+        ):
+            return await handler(request)
 
         key = client_key(request)
 
@@ -216,13 +260,19 @@ def build_gate_middleware(
                     headers={"Retry-After": str(seconds)},
                 )
 
-        supplied_header = request.headers.get("Authorization", "").encode("latin-1")
+        supplied_header_value = request.headers.get("Authorization", "")
+        supplied_header = supplied_header_value.encode("latin-1")
         if secrets.compare_digest(supplied_header, expected_header):
             if rate_limiter is not None:
                 rate_limiter.record_success(key)
             return await handler(request)
 
-        if rate_limiter is not None:
+        # Only a request that actually *offered* a credential and got it
+        # wrong is an authentication attempt, and only attempts consume
+        # the backoff budget -- see this function's own docstring for the
+        # full reasoning and the incidents that forced it.
+        credential_was_offered = bool(supplied_header_value.strip() or supplied_cookie)
+        if rate_limiter is not None and credential_was_offered:
             rate_limiter.record_failure(key)
 
         _logger.warning(
@@ -291,8 +341,18 @@ class RateLimiter:
     uses too (defence in depth -- the credential itself is 256 bits of
     entropy from :func:`generate_credential`, already computationally
     infeasible to brute-force regardless of this; this bounds the
-    request/log volume an automated scanner can generate on either
-    path).
+    request/log volume a *credential-guessing* automated scanner can
+    generate on either path).
+
+    Only the callers decide what counts as a failure, and both of this
+    module's own now agree on one rule: a request that offered no
+    credential at all is not an attempt, and never reaches
+    :meth:`record_failure` -- see :func:`build_gate_middleware`'s own
+    docstring. So this bounds guessing, not raw unauthenticated request
+    volume; an unauthenticated flood is bounded at the network level
+    instead, by the fail2ban/crowdsec integration keying off ``_logger``'s
+    "authentication failure from <IP>" line (which such requests still
+    emit, unchanged, on every single one).
 
     Deliberately in-process, in-memory state, not durable storage --
     mirrors this gate's own fully-stateless design elsewhere (simple, no
@@ -582,7 +642,16 @@ def build_login_routes(
 
     ``rate_limiter`` defaults to a fresh :class:`RateLimiter` (module-level
     default parameters) when omitted -- pass one explicitly to share state
-    across calls, or to tune the backoff.
+    across calls, or to tune the backoff. It records a failure only for a
+    submission that actually offered a credential: a POST whose ``token``
+    field is blank or absent is still rejected with the same 401 login
+    page and the same warning line, but tested nothing, so it does not
+    consume the backoff budget -- the same rule, for the same reasons, as
+    :func:`build_gate_middleware`'s own Bearer-header path (see its
+    docstring). It matters more here than the shape of the form suggests:
+    ``__init__.py`` shares one limiter instance across this form, the gate
+    middleware, and the OIDC routes, so a lockout accrued on any of them
+    is a lockout on all three.
 
     ``oidc_start_path``, when given, adds a second login option to every
     rendered state of this page -- see :func:`_render_login_page`'s own
@@ -618,9 +687,22 @@ def build_login_routes(
             )
 
         data = await request.post()
-        supplied = str(data.get("token", "")).encode("latin-1", errors="ignore")
+        submitted = str(data.get("token", ""))
+        supplied = submitted.encode("latin-1", errors="ignore")
         if not supplied or not secrets.compare_digest(supplied, expected):
-            limiter.record_failure(key)
+            # Same rule the Bearer-header path applies (see
+            # `build_gate_middleware`'s own docstring): only a submission
+            # that actually offered a credential is an attempt. A form
+            # posted with a blank or absent `token` -- a human hitting
+            # Enter on the empty field, or a bot posting empty bodies --
+            # tested nothing, and must not lock out the shared limiter
+            # `__init__.py` hands to this form, the gate middleware, and
+            # the OIDC routes alike. Keyed on the *submitted* value, not
+            # on `supplied`: `errors="ignore"` collapses an all-non-
+            # latin-1 token to b"", and that must stay an attempt rather
+            # than becoming a source of unlimited free guesses.
+            if submitted.strip():
+                limiter.record_failure(key)
             _logger.warning(
                 "comfyui_curu_auth: authentication failure from %s (login form)",
                 key,

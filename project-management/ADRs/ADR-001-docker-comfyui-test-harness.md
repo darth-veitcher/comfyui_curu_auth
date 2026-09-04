@@ -57,6 +57,16 @@ extending this harness need to know them, not just this spec:
   loop will eventually block itself; authenticate polling traffic instead
   (see `specs/001-docker-comfyui-harness/research.md`).
 
+> **Amended 2026-09-04 by [ADR-004](ADR-004-only-offered-credentials-count-as-attempts.md).**
+> The second bullet no longer holds: `gate.py` records a failure only for
+> a request that actually *offered* a credential and got it wrong, so
+> unauthenticated polling can no longer rate-limit itself. Consequently
+> the "(or 429)" half of the first bullet is withdrawn —
+> `healthcheck.py` now requires 401 exactly, since a 429 there would
+> indicate a genuine lockout rather than the probe's own self-inflicted
+> one. The rest of both bullets — and this ADR's core decision, that the
+> healthcheck must never tolerate 200 — stands unchanged.
+
 Full design detail and the decisions specific to spec 001 alone (no `just`
 task runner, `system` pytest marker convention, no `contracts/` directory)
 live in `specs/001-docker-comfyui-harness/research.md` — this ADR exists
