@@ -38,10 +38,13 @@ LOGIN_PATH = "/curu-auth/login"
 #: itself (the gate must never transmit that credential over the network
 #: itself; a browser replaying a cookie on every request is exactly such
 #: a transmission, so this cookie must carry something else).
-#: `secure=True`/`samesite="Strict"` on the `set_cookie` call (below)
-#: mean it is only ever sent back over the same HTTPS origin that issued
-#: it (e.g. a cloud GPU host's own TLS-terminating proxy) -- never over
-#: plain HTTP, never cross-site.
+#: Every `Set-Cookie` for it goes through :func:`set_session_cookie`:
+#: `HttpOnly` and `SameSite=Strict` always (never readable by script,
+#: never sent cross-site), and `Secure` exactly when the browser reached
+#: this gate over HTTPS (:func:`browser_used_https`) -- so a cookie issued
+#: over HTTPS is never sent back over plain HTTP, while a host reached
+#: over plain HTTP on purpose still gets a cookie the browser will store.
+#: ADR-006.
 COOKIE_NAME = "curu_auth"
 
 #: Public (not `_`-prefixed) because oidc.py's callback handler mints a
@@ -124,30 +127,92 @@ def resolve_persistent_credential(
     return credential
 
 
-def _expire_session_cookie(response: web.StreamResponse) -> None:
-    """Tell the client to drop its :data:`COOKIE_NAME` cookie, by setting
-    the same cookie to an empty value with ``max_age=0``.
+def browser_used_https(request: web.Request) -> bool:
+    """Whether the *browser's* own hop to this gate was HTTPS -- which is
+    what decides whether it will store a ``Secure`` cookie, and so whether
+    :func:`set_session_cookie` sets one. ADR-006.
 
-    Attributes mirror the ones :func:`build_login_routes` and ``oidc.py``
-    issue it with (``httponly``/``secure``/``samesite="Strict"``, and
-    aiohttp's own default ``path="/"``) -- a browser matches a replacement
-    cookie on name/domain/path, and issuing it over the same HTTPS origin
-    with the same flags is what makes it overwrite rather than sit
-    alongside the original.
+    True when this connection is itself TLS (ComfyUI started with
+    ``--tls-keyfile``/``--tls-certfile``), or when a reverse proxy in front
+    of it reports that the browser spoke HTTPS to it -- RunPod's proxy
+    terminates TLS and forwards plain HTTP to the pod, so the pod's own
+    connection says nothing about what the browser used. Both standard
+    reports are read: the de facto ``X-Forwarded-Proto`` and RFC 7239's
+    ``Forwarded: proto=``. Each is read at its left-most entry, the hop the
+    browser itself made -- the same reading :func:`client_key` gives
+    ``X-Forwarded-For``.
+
+    Trusting a header any client could write is safe here, because of the
+    direction it can move the answer. A browser never sends either header
+    itself; only something in front of the gate adds one. A forged
+    ``https`` only ever *adds* ``Secure``, so a client sending one over
+    plain HTTP gets a cookie its own browser will not store -- it locks
+    only itself out. What would weaken an HTTPS deployment is the
+    opposite, a missing report, and no client can cause that: it is a
+    property of the proxy in front. A deployment behind a TLS-terminating
+    proxy therefore depends on that proxy reporting ``https`` -- verify it
+    by checking for ``Secure`` on a real login's ``Set-Cookie``.
+    """
+
+    if request.secure:
+        return True
+    forwarded_proto = request.headers.get("X-Forwarded-Proto", "")
+    if forwarded_proto.split(",")[0].strip().lower() == "https":
+        return True
+    if request.forwarded:
+        return request.forwarded[0].get("proto", "").lower() == "https"
+    return False
+
+
+def set_session_cookie(
+    response: web.StreamResponse, request: web.Request, value: str, *, max_age: int
+) -> None:
+    """Set :data:`COOKIE_NAME` on ``response`` -- the one place this
+    package writes that cookie, whether issuing a session
+    (:func:`build_login_routes`, ``oidc.py``'s callback) or expiring one
+    (``value=""``, ``max_age=0``).
+
+    Public (not ``_``-prefixed) for the same reason as :func:`client_key`:
+    ``oidc.py`` is a second real consumer, and the issue and the expiry
+    *must* agree. A browser matches a replacement cookie on
+    name/domain/path, but will not let a plain-HTTP response overwrite a
+    ``Secure`` cookie ("Leave Secure Cookies Alone"), so an expiry whose
+    flags drift from the issue's can fail to delete it at all. Deriving
+    both from the same request's scheme keeps them in step.
+
+    ``Secure`` follows :func:`browser_used_https`; ``HttpOnly``,
+    ``SameSite=Strict`` and aiohttp's default ``Path=/`` are unconditional.
+    Over plain HTTP the cookie travels in clear -- exactly as the
+    credential typed into the login form on that same connection already
+    did, and as the ``Authorization`` header does on every request there.
+    Running the gate on plain HTTP is the operator's choice (e.g.
+    curu-infra's ADR-050, a host on its own LAN); this function only stops
+    that choice from also breaking browser login.
+    """
+
+    response.set_cookie(
+        COOKIE_NAME,
+        value,
+        max_age=max_age,
+        httponly=True,
+        secure=browser_used_https(request),
+        samesite="Strict",
+    )
+
+
+def _expire_session_cookie(response: web.StreamResponse, request: web.Request) -> None:
+    """Tell the client to drop its :data:`COOKIE_NAME` cookie, by setting
+    the same cookie to an empty value with ``max_age=0`` -- through
+    :func:`set_session_cookie`, so it carries exactly the attributes the
+    login form and ``oidc.py`` issue it with over the same scheme, which
+    is what makes it overwrite rather than sit alongside the original.
 
     Applied only to a request that actually presented an unrecognised
     cookie, and only where cookie auth is enabled -- see
     :func:`build_gate_middleware`'s own docstring for why.
     """
 
-    response.set_cookie(
-        COOKIE_NAME,
-        "",
-        max_age=0,
-        httponly=True,
-        secure=True,
-        samesite="Strict",
-    )
+    set_session_cookie(response, request, "", max_age=0)
 
 
 def build_gate_middleware(
@@ -313,7 +378,7 @@ def build_gate_middleware(
                     # body, same as an outright missing/wrong credential.
                     redirect = web.HTTPFound(LOGIN_PATH)
                     if supplied_cookie:
-                        _expire_session_cookie(redirect)
+                        _expire_session_cookie(redirect, request)
                     raise redirect
                 blocked = web.json_response(
                     {"detail": "too many attempts", "retry_after": seconds},
@@ -328,7 +393,7 @@ def build_gate_middleware(
                 # whole block and re-arming the backoff the instant it
                 # lapsed.
                 if supplied_cookie:
-                    _expire_session_cookie(blocked)
+                    _expire_session_cookie(blocked, request)
                 return blocked
 
         supplied_header_value = request.headers.get("Authorization", "")
@@ -356,14 +421,14 @@ def build_gate_middleware(
         if "text/html" in request.headers.get("Accept", ""):
             redirect = web.HTTPFound(LOGIN_PATH)
             if supplied_cookie:
-                _expire_session_cookie(redirect)
+                _expire_session_cookie(redirect, request)
             raise redirect
 
         rejected = web.json_response(
             {"detail": "missing or invalid credential"}, status=401
         )
         if supplied_cookie:
-            _expire_session_cookie(rejected)
+            _expire_session_cookie(rejected, request)
         return rejected
 
     return gate
@@ -796,13 +861,8 @@ def build_login_routes(
         limiter.record_success(key)
         session_token = sessions.issue()
         redirect = web.HTTPFound("/")
-        redirect.set_cookie(
-            COOKIE_NAME,
-            session_token,
-            max_age=COOKIE_MAX_AGE_SECONDS,
-            httponly=True,
-            secure=True,
-            samesite="Strict",
+        set_session_cookie(
+            redirect, request, session_token, max_age=COOKIE_MAX_AGE_SECONDS
         )
         # aiohttp deprecates *returning* an HTTPException subclass in
         # favour of raising it (it's still a real Response underneath --
@@ -818,8 +878,10 @@ __all__ = [
     "LOGIN_PATH",
     "RateLimiter",
     "SessionStore",
+    "browser_used_https",
     "build_gate_middleware",
     "build_login_routes",
     "client_key",
     "generate_credential",
+    "set_session_cookie",
 ]

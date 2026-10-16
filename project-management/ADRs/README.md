@@ -32,7 +32,8 @@ Superseded ADRs keep their file; update their status to `Superseded by ADR-###`.
 |-----|-------|--------|------|
 | [ADR-000](ADR-000-template.md) | Template | — | — |
 | [ADR-001](ADR-001-docker-comfyui-test-harness.md) | Docker-based local ComfyUI test harness, adapted from curu's own | Accepted (amended by ADR-004) | 2026-07-23 |
-| [ADR-002](ADR-002-oidc-session-sharing-and-test-idp.md) | OIDC session sharing + Authelia as test IdP | Accepted | 2026-07-23 |
+| [ADR-002](ADR-002-oidc-session-sharing-and-test-idp.md) | OIDC session sharing + Authelia as test IdP | Accepted (amended by ADR-006) | 2026-07-23 |
 | [ADR-003](ADR-003-gate-public-paths-generalization.md) | Generalize `gate.py`'s single-path bypass into a "public paths" set | Accepted | 2026-07-23 |
 | [ADR-004](ADR-004-only-offered-credentials-count-as-attempts.md) | Only an *offered* credential counts as an authentication attempt | Accepted | 2026-09-04 |
-| [ADR-005](ADR-005-expire-a-stale-session-cookie-rather-than-exempt-it.md) | Expire a stale session cookie, rather than exempt it from the limiter | Accepted | 2026-09-04 |
+| [ADR-005](ADR-005-expire-a-stale-session-cookie-rather-than-exempt-it.md) | Expire a stale session cookie, rather than exempt it from the limiter | Accepted (amended by ADR-006) | 2026-09-04 |
+| [ADR-006](ADR-006-session-cookie-secure-follows-the-browsers-scheme.md) | The session cookie is `Secure` exactly when the browser used HTTPS | Accepted | 2026-10-16 |
