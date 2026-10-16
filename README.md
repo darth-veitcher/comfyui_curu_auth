@@ -29,7 +29,7 @@ comfyui-curu-auth gate active. Credential:
 Use that credential two ways:
 
 - **Automated clients** — send `Authorization: Bearer <credential>` with every request.
-- **A real browser** — open ComfyUI's own UI directly and paste the credential into the login form the gate serves at `/curu-auth/login`. A `HttpOnly` / `Secure` / `SameSite=Strict` cookie carries the session from there (30 days); the credential itself is never transmitted a second time.
+- **A real browser** — open ComfyUI's own UI directly and paste the credential into the login form the gate serves at `/curu-auth/login`. A `HttpOnly` / `SameSite=Strict` cookie carries the session from there (30 days); the credential itself is never transmitted a second time. The cookie is also `Secure` whenever you reached ComfyUI over HTTPS — see [HTTPS, plain HTTP, and the session cookie](#https-plain-http-and-the-session-cookie).
 
 There's no way to fetch the credential over the network — it only ever
 prints to the console. That's deliberate: no automated credential
@@ -73,6 +73,35 @@ automated clients is unaffected either way.
 See [`specs/002-oidc-login/quickstart.md`](specs/002-oidc-login/quickstart.md)
 for a full walkthrough, including running the live suite against a real
 Authelia instance.
+
+## HTTPS, plain HTTP, and the session cookie
+
+The session cookie is `Secure` exactly when your browser reached ComfyUI
+over HTTPS:
+
+- ComfyUI serves TLS itself (`--tls-keyfile` / `--tls-certfile`), **or**
+- a reverse proxy in front of it terminates TLS and says so, with
+  `X-Forwarded-Proto: https` or the standard `Forwarded: proto=https`.
+  RunPod's proxy is this case.
+
+Otherwise, as on a host you reach at `http://<lan-address>:8188`, the
+cookie is set without `Secure`. Browsers won't store a `Secure` cookie
+from a plain-HTTP page (localhost excepted), so a correct credential would
+otherwise send you straight back to the login form. `HttpOnly`,
+`SameSite=Strict` and the 30-day lifetime are the same either way.
+
+Plain HTTP is a choice with a cost. On it, the session cookie crosses the
+network unencrypted, just as the credential you type into the form and
+every `Authorization` header already do. Anyone who can watch that
+network can replay them. Use HTTPS wherever the network between your
+browser and ComfyUI isn't one you trust.
+
+Behind a TLS-terminating proxy, the gate can only know the browser used
+HTTPS if the proxy tells it. To check yours, log in through it and look
+at the response's `Set-Cookie`: it must end in `; Secure`. If it doesn't,
+your proxy isn't sending `X-Forwarded-Proto` or `Forwarded`, and you
+should configure it to. See
+[ADR-006](project-management/ADRs/ADR-006-session-cookie-secure-follows-the-browsers-scheme.md).
 
 ## Repeated failures back off — on every path
 

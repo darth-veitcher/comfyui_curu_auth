@@ -32,6 +32,13 @@ needs zero changes: it already accepts any token `SessionStore` recognizes,
 regardless of which login path minted it. The Bearer-header / default
 zero-config credential path is untouched and unaware OIDC exists.
 
+> **Amended 2026-10-16 by [ADR-006](ADR-006-session-cookie-secure-follows-the-browsers-scheme.md).**
+> `Secure` is no longer a fixed attribute: it is set exactly when the
+> browser reached the gate over HTTPS (a TLS connection, or a proxy
+> reporting `https`), so a host reached over plain HTTP gets a cookie the
+> browser will store. The callback still sets the same cookie as the credential form,
+> through the same function, so it follows the same rule.
+
 **Test IdP**: extend `local-test-harness`'s `docker-compose.yml` (ADR-001)
 with an `authelia` service using Authelia's **Lite** bundle — file-based
 user config, SQLite-backed storage, no Postgres/Redis. Authelia is OpenID

@@ -66,6 +66,13 @@ cookie set to `""` with `max_age=0` on the rejecting response, carrying
 the same `HttpOnly` / `Secure` / `SameSite=Strict` / `Path=/` attributes it
 was issued with.
 
+> **Amended 2026-10-16 by [ADR-006](ADR-006-session-cookie-secure-follows-the-browsers-scheme.md).**
+> `Secure` is no longer a fixed attribute: it is set exactly when the
+> browser reached the gate over HTTPS (a TLS connection, or a proxy
+> reporting `https`), so a host reached over plain HTTP gets a cookie the
+> browser will store. The expiry derives `Secure` from the same request through the same
+> function, so "the attributes it was issued with" still holds exactly.
+
 Applied on **all four** branches such a request can leave by — the `401`,
 the already-blocked `429`, and each one's `Accept: text/html` redirect to
 `LOGIN_PATH`. The `429` branch is the one that actually stops the storm:
