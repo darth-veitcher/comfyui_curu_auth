@@ -7,6 +7,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 <!-- version list -->
 
+## v1.0.1 (2026-10-16)
+
+### Bug Fixes
+
+- Set the session cookie's Secure from the scheme the browser used
+  ([#12](https://github.com/darth-veitcher/comfyui_curu_auth/pull/12),
+  [`5ae05a7`](https://github.com/darth-veitcher/comfyui_curu_auth/commit/5ae05a7f6a1bdc6e53b63eef00374cb4e879c80c))
+
+### Documentation
+
+- ADR-006 -- the session cookie is Secure exactly when the browser used HTTPS
+  ([#12](https://github.com/darth-veitcher/comfyui_curu_auth/pull/12),
+  [`5ae05a7`](https://github.com/darth-veitcher/comfyui_curu_auth/commit/5ae05a7f6a1bdc6e53b63eef00374cb4e879c80c))
+
+### Testing
+
+- A correct login over plain HTTP must leave the browser logged in
+  ([#12](https://github.com/darth-veitcher/comfyui_curu_auth/pull/12),
+  [`5ae05a7`](https://github.com/darth-veitcher/comfyui_curu_auth/commit/5ae05a7f6a1bdc6e53b63eef00374cb4e879c80c))
+
+
 ## v1.0.0 (2026-09-04)
 
 - Initial Release
