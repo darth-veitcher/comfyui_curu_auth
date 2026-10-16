@@ -11,7 +11,13 @@ Repository = "https://github.com/darth-veitcher/comfyui_curu_auth"
 Documentation = "https://github.com/darth-veitcher/comfyui_curu_auth#readme"
 
 [dependency-groups]
-dev = ["pytest>=8.2", "pytest-asyncio>=0.24", "ruff>=0.6", "ty>=0.0.1a1"]
+dev = [
+    "cryptography>=42",
+    "pytest>=8.2",
+    "pytest-asyncio>=0.24",
+    "ruff>=0.6",
+    "ty>=0.0.1a1",
+]
 
 # This package is loaded directly by ComfyUI as a raw custom_nodes/ directory --
 # it is never `pip install`ed or built into a wheel. `package = false` tells uv

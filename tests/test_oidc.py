@@ -742,7 +742,8 @@ class TestOidcCallbackHandler:
         assert sessions.is_valid(cookie.value)
         assert cookie["max-age"] == str(COOKIE_MAX_AGE_SECONDS)
         assert cookie["httponly"]
-        assert cookie["secure"]
+        # `secure` follows the scheme the browser used (ADR-006) -- pinned
+        # in TestOidcCallbackCookieFollowsTheScheme below.
 
     async def test_mismatched_state_does_not_establish_a_session(self) -> None:
         from gate import SessionStore
@@ -943,6 +944,80 @@ class TestOidcCallbackHandler:
 # --------------------------------------------------------------------------
 
 _START_PATH = "/curu-auth/oidc/start"
+
+
+class TestOidcCallbackCookieFollowsTheScheme:
+    """The callback mints the same ``curu_auth`` cookie the login form does
+    (ADR-002), so it must follow the same ``Secure`` rule (ADR-006): an IdP
+    login that lands an operator back on a plain-HTTP LAN host would
+    otherwise end exactly like the credential form did -- a cookie the
+    browser refuses to store, and the login page again."""
+
+    async def _callback_set_cookie(self, headers: dict[str, str]) -> set[str]:
+        from gate import SessionStore
+        from oidc import AuthorizationRequestStore, OIDCConfig, build_oidc_routes
+
+        key = _generate_rsa_key()
+        holder: dict = {}
+        provider_app = _mock_provider_app(key, holder)
+
+        async with TestClient(TestServer(provider_app)) as provider_client:
+            holder["base_url"] = str(provider_client.make_url("")).rstrip("/")
+            config = OIDCConfig(
+                issuer_url=holder["base_url"],
+                client_id=_CLIENT_ID,
+                client_secret="s3cr3t",
+                redirect_uri=f"http://comfyui.lan:8188{_CALLBACK_PATH}",
+            )
+            store = AuthorizationRequestStore()
+            in_flight = store.create()
+            holder["nonce"] = in_flight.nonce
+
+            _start, callback = build_oidc_routes(
+                config, sessions=SessionStore(), store=store
+            )
+            node_app = web.Application()
+            node_app.router.add_get(_CALLBACK_PATH, callback)
+
+            async with TestClient(TestServer(node_app)) as node_client:
+                response = await node_client.get(
+                    _CALLBACK_PATH,
+                    params={"code": "mock-auth-code", "state": in_flight.state},
+                    headers=headers,
+                    allow_redirects=False,
+                )
+
+        assert response.status == 302
+        set_cookie = [
+            value
+            for value in response.headers.getall("Set-Cookie", [])
+            if value.startswith("curu_auth=")
+        ]
+        assert len(set_cookie) == 1, set_cookie
+        return {part.strip() for part in set_cookie[0].split(";")[1:]}
+
+    async def test_over_plain_http_the_cookie_is_not_secure(self) -> None:
+        from gate import COOKIE_MAX_AGE_SECONDS
+
+        assert await self._callback_set_cookie({}) == {
+            "HttpOnly",
+            f"Max-Age={COOKIE_MAX_AGE_SECONDS}",
+            "Path=/",
+            "SameSite=Strict",
+        }
+
+    async def test_behind_a_tls_terminating_proxy_the_cookie_is_secure(
+        self,
+    ) -> None:
+        from gate import COOKIE_MAX_AGE_SECONDS
+
+        assert await self._callback_set_cookie({"X-Forwarded-Proto": "https"}) == {
+            "HttpOnly",
+            f"Max-Age={COOKIE_MAX_AGE_SECONDS}",
+            "Path=/",
+            "SameSite=Strict",
+            "Secure",
+        }
 
 
 class TestOidcStartRouteIsRateLimitedAndCapped:

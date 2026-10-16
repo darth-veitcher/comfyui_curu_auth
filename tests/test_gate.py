@@ -9,13 +9,18 @@ requires a real ComfyUI ``server`` module) -- only ``gate.py`` itself.
 from __future__ import annotations
 
 import asyncio
+import datetime
+import ipaddress
+import ssl
 from pathlib import Path
 
+import aiohttp
 import pytest
 from aiohttp import web
 from aiohttp.test_utils import TestClient, TestServer, make_mocked_request
 
 from gate import (
+    COOKIE_MAX_AGE_SECONDS,
     COOKIE_NAME,
     LOGIN_PATH,
     RateLimiter,
@@ -138,6 +143,114 @@ class TestResolvePersistentCredential:
 
 async def _ok_handler(request: web.Request) -> web.Response:
     return web.json_response({"ok": True})
+
+
+# --------------------------------------------------------------------------
+# Reaching a TestServer the three ways a browser can reach this gate --
+# shared by every test whose expected cookie depends on the scheme (ADR-006).
+# --------------------------------------------------------------------------
+
+#: ``plain-http``: an operator-owned host on its LAN address, no TLS
+#: anywhere. ``tls``: ComfyUI serving TLS itself (``--tls-keyfile``).
+#: ``tls-terminating-proxy``: RunPod's own proxy -- the browser speaks
+#: HTTPS to the proxy, the proxy speaks plain HTTP to the pod, and says
+#: which scheme the browser used in ``X-Forwarded-Proto``.
+_SCHEMES = ("plain-http", "tls", "tls-terminating-proxy")
+
+
+@pytest.fixture(scope="module")
+def tls_context(tmp_path_factory: pytest.TempPathFactory) -> ssl.SSLContext:
+    """A server-side TLS context with a throwaway self-signed certificate,
+    so the ``tls`` case is a real TLS transport rather than a header
+    claiming one."""
+
+    from cryptography import x509
+    from cryptography.hazmat.primitives import hashes, serialization
+    from cryptography.hazmat.primitives.asymmetric import ec
+    from cryptography.x509.oid import NameOID
+
+    key = ec.generate_private_key(ec.SECP256R1())
+    name = x509.Name([x509.NameAttribute(NameOID.COMMON_NAME, "127.0.0.1")])
+    now = datetime.datetime.now(datetime.UTC)
+    certificate = (
+        x509.CertificateBuilder()
+        .subject_name(name)
+        .issuer_name(name)
+        .public_key(key.public_key())
+        .serial_number(x509.random_serial_number())
+        .not_valid_before(now - datetime.timedelta(minutes=1))
+        .not_valid_after(now + datetime.timedelta(days=1))
+        .add_extension(
+            x509.SubjectAlternativeName(
+                [x509.IPAddress(ipaddress.ip_address("127.0.0.1"))]
+            ),
+            critical=False,
+        )
+        .sign(key, hashes.SHA256())
+    )
+    directory = tmp_path_factory.mktemp("tls")
+    cert_path = directory / "cert.pem"
+    key_path = directory / "key.pem"
+    cert_path.write_bytes(certificate.public_bytes(serialization.Encoding.PEM))
+    key_path.write_bytes(
+        key.private_bytes(
+            serialization.Encoding.PEM,
+            serialization.PrivateFormat.PKCS8,
+            serialization.NoEncryption(),
+        )
+    )
+    context = ssl.create_default_context(ssl.Purpose.CLIENT_AUTH)
+    context.load_cert_chain(cert_path, key_path)
+    return context
+
+
+class _TlsTestServer(TestServer):
+    """A ``TestServer`` listening over TLS. ``TestServer(app, ssl=...)``
+    looks like it should do this and does not: the constructor swallows
+    unknown keyword arguments, and only ``start_server`` reads ``ssl`` --
+    which ``TestClient`` calls with no arguments. The server then listens
+    on plain HTTP, and a "TLS" test silently exercises nothing."""
+
+    def __init__(self, app: web.Application, *, tls_context: ssl.SSLContext) -> None:
+        super().__init__(app)
+        self._tls_context = tls_context
+
+    async def start_server(self, loop=None, **kwargs) -> None:
+        await super().start_server(loop=loop, ssl=self._tls_context, **kwargs)
+
+
+def _client_via(
+    via: str, app: web.Application, tls_context: ssl.SSLContext
+) -> tuple[TestClient, dict[str, str]]:
+    """A client reaching ``app`` the way ``via`` names, plus the headers
+    every request it sends must carry to look like that path."""
+
+    if via == "tls":
+        return (
+            TestClient(
+                _TlsTestServer(app, tls_context=tls_context),
+                connector=aiohttp.TCPConnector(ssl=False),
+            ),
+            {},
+        )
+    if via == "tls-terminating-proxy":
+        return TestClient(TestServer(app)), {"X-Forwarded-Proto": "https"}
+    assert via == "plain-http"
+    return TestClient(TestServer(app)), {}
+
+
+def _session_cookie_attributes(response: aiohttp.ClientResponse) -> set[str]:
+    """The attribute set of the one ``curu_auth`` ``Set-Cookie`` header on
+    ``response`` -- the header the client actually received, not
+    ``set_cookie``'s arguments."""
+
+    set_cookie = [
+        value
+        for value in response.headers.getall("Set-Cookie", [])
+        if value.startswith(f"{COOKIE_NAME}=")
+    ]
+    assert len(set_cookie) == 1, set_cookie
+    return {part.strip() for part in set_cookie[0].split(";")[1:]}
 
 
 class TestBuildGateMiddleware:
@@ -673,8 +786,9 @@ class TestAStaleSessionCookieIsExpiredNotReplayedForever:
             )
             assert served.status == 200
 
-    async def test_the_expiry_carries_the_same_attributes_it_was_issued_with(
-        self,
+    @pytest.mark.parametrize("via", _SCHEMES)
+    async def test_the_expiry_carries_the_attributes_the_login_issued_it_with(
+        self, via: str, tls_context: ssl.SSLContext
     ) -> None:
         # Added after mutation testing: replacing `secure=True` /
         # `samesite="Strict"` on the expiry with `False`/`"Lax"` left the
@@ -687,38 +801,41 @@ class TestAStaleSessionCookieIsExpiredNotReplayedForever:
         # must never be the one place this gate emits a weaker cookie than
         # the login form issues. Pinned against the header the client
         # actually receives, not against `set_cookie`'s arguments.
+        #
+        # Compared against what the login form issues *over the same
+        # scheme*, not against a constant: `Secure` follows the scheme the
+        # browser used (ADR-006), so the only invariant that holds on
+        # every transport is "the expiry matches the issue".
         before_restart = SessionStore()
         stale_token = before_restart.issue()
         after_restart = SessionStore()
+        app = _app_with_login("expected-token", sessions=after_restart)
 
-        app = web.Application(
-            middlewares=[
-                build_gate_middleware("expected-token", sessions=after_restart)
-            ]
-        )
-        app.router.add_get("/anything", _ok_handler)
-
-        async with TestClient(TestServer(app)) as client:
-            client.session.cookie_jar.update_cookies(
-                {COOKIE_NAME: stale_token},
-                response_url=client.make_url("/"),
+        client, headers = _client_via(via, app, tls_context)
+        async with client:
+            issued = await client.post(
+                LOGIN_PATH,
+                data={"token": "expected-token"},
+                headers=headers,
+                allow_redirects=False,
             )
-            rejected = await client.get("/anything")
+            # Only the stale cookie may travel on the rejected request --
+            # over TLS the jar would otherwise also replay the valid one
+            # just issued, and the request would be let through.
+            client.session.cookie_jar.clear()
+            rejected = await client.get(
+                "/anything",
+                headers={**headers, "Cookie": f"{COOKIE_NAME}={stale_token}"},
+            )
 
-            set_cookie = [
-                value
-                for value in rejected.headers.getall("Set-Cookie")
-                if value.startswith(f"{COOKIE_NAME}=")
-            ]
-            assert len(set_cookie) == 1
-            attributes = {part.strip() for part in set_cookie[0].split(";")[1:]}
-            assert attributes == {
-                "HttpOnly",
-                "Max-Age=0",
-                "Path=/",
-                "SameSite=Strict",
-                "Secure",
-            }
+        assert rejected.status == 401
+        issued_attributes = _session_cookie_attributes(issued)
+        expiry_attributes = _session_cookie_attributes(rejected)
+        assert "Max-Age=0" in expiry_attributes
+        assert expiry_attributes - {"Max-Age=0"} == issued_attributes - {
+            f"Max-Age={COOKIE_MAX_AGE_SECONDS}"
+        }
+        assert ("Secure" in expiry_attributes) == (via != "plain-http")
 
     async def test_the_rejecting_response_expires_the_unrecognised_cookie(
         self,
@@ -1149,14 +1266,10 @@ class TestOidcLoginOptionOnLoginPage:
 
 
 class TestLoginSubmission:
-    """Asserts the raw `Set-Cookie` response header directly, not via the
-    client's own cookie jar + redirect-follow: the cookie is deliberately
-    `Secure` (real-deployment correctness, RunPod's own HTTPS-terminating
-    proxy), which a spec-compliant client -- correctly -- refuses to
-    store at all when the connection is plain HTTP, as this hermetic
-    `TestServer` is. That refusal is the client behaving correctly, not a
-    bug in the gate; asserting the header directly tests this gate's own
-    code without depending on that unrelated HTTP-vs-HTTPS distinction.
+    """Asserts the raw `Set-Cookie` response header directly. Whether that
+    cookie is `Secure` depends on the scheme the browser used, and is
+    pinned on its own in
+    :class:`TestTheSessionCookieIsSecureExactlyWhenTheBrowserUsedHttps`.
     """
 
     async def test_the_correct_token_sets_a_cookie_and_redirects(self) -> None:
@@ -1170,7 +1283,6 @@ class TestLoginSubmission:
             assert response.headers["Location"] == "/"
             set_cookie = response.headers["Set-Cookie"]
             assert "HttpOnly" in set_cookie
-            assert "Secure" in set_cookie
             assert "SameSite=Strict" in set_cookie
             # The cookie's own value is a distinct, minted session token --
             # never the master credential itself.
@@ -1202,6 +1314,141 @@ class TestLoginSubmission:
             "authentication failure" in r.message and "203.0.113.9" in r.message
             for r in caplog.records
         )
+
+
+class TestTheSessionCookieIsSecureExactlyWhenTheBrowserUsedHttps:
+    """``Secure`` on the ``curu_auth`` cookie follows the scheme the
+    *browser* used -- ADR-006.
+
+    It used to be unconditional, which was right while the gate was only
+    ever reached through RunPod's HTTPS proxy. curu-infra now also installs
+    it on operator-owned hosts reached at plain ``http://<lan-address>:8188``
+    (curu-infra ADR-050), and a browser refuses to store a ``Secure``
+    cookie set over plain HTTP on any origin other than localhost. So a
+    *correct* credential at the login form produced ``302 -> /``, no
+    cookie, and the login page again: the operator's right credential
+    looked "not accepted". Confirmed live with curl --
+    ``Set-Cookie: curu_auth=...; HttpOnly; Max-Age=2592000; Path=/;
+    SameSite=Strict; Secure`` on a plain-HTTP response. The Bearer header
+    was unaffected throughout.
+
+    This repo's own docker harness never saw it: it is reached at
+    ``http://localhost:8188``, and localhost is the one plain-HTTP origin
+    browsers do treat as secure.
+
+    ``aiohttp``'s client jar, like a browser, will not send a ``Secure``
+    cookie over plain HTTP, so the end-to-end tests below reproduce the
+    lockout itself rather than only the header that caused it.
+    """
+
+    async def test_a_correct_login_over_plain_http_lets_the_browser_in(
+        self,
+    ) -> None:
+        app = _app_with_login("expected-token")
+
+        async with TestClient(TestServer(app)) as client:
+            login = await client.post(
+                LOGIN_PATH, data={"token": "expected-token"}, allow_redirects=False
+            )
+            assert login.status == 302
+            followed = await client.get("/anything")
+            assert followed.status == 200
+
+    async def test_a_correct_login_over_https_lets_the_browser_in(
+        self, tls_context: ssl.SSLContext
+    ) -> None:
+        app = _app_with_login("expected-token")
+
+        client, _ = _client_via("tls", app, tls_context)
+        async with client:
+            login = await client.post(
+                LOGIN_PATH, data={"token": "expected-token"}, allow_redirects=False
+            )
+            assert login.status == 302
+            followed = await client.get("/anything")
+            assert followed.status == 200
+
+    @pytest.mark.parametrize("via", _SCHEMES)
+    async def test_secure_is_set_exactly_when_the_browser_used_https(
+        self, via: str, tls_context: ssl.SSLContext
+    ) -> None:
+        # Everything but `Secure` is the same on every scheme -- the fix
+        # must not have loosened HttpOnly, SameSite=Strict, Path or the
+        # 30-day lifetime anywhere.
+        app = _app_with_login("expected-token")
+
+        client, headers = _client_via(via, app, tls_context)
+        async with client:
+            login = await client.post(
+                LOGIN_PATH,
+                data={"token": "expected-token"},
+                headers=headers,
+                allow_redirects=False,
+            )
+
+        expected = {
+            "HttpOnly",
+            f"Max-Age={COOKIE_MAX_AGE_SECONDS}",
+            "Path=/",
+            "SameSite=Strict",
+        }
+        if via != "plain-http":
+            expected.add("Secure")
+        assert _session_cookie_attributes(login) == expected
+
+    @pytest.mark.parametrize(
+        "headers",
+        [
+            {"X-Forwarded-Proto": "HTTPS"},
+            # A chain of proxies: the left-most entry is the hop the
+            # browser itself made, the same reading `client_key` gives
+            # `X-Forwarded-For`.
+            {"X-Forwarded-Proto": "https, http"},
+            # RFC 7239's standard form of the same report.
+            {"Forwarded": "for=203.0.113.7;proto=https"},
+            {"Forwarded": "for=203.0.113.7;proto=https, for=10.0.0.1;proto=http"},
+        ],
+        ids=["xfp-uppercase", "xfp-chain", "forwarded", "forwarded-chain"],
+    )
+    async def test_every_standard_proxy_report_of_https_makes_it_secure(
+        self, headers: dict[str, str]
+    ) -> None:
+        app = _app_with_login("expected-token")
+
+        async with TestClient(TestServer(app)) as client:
+            login = await client.post(
+                LOGIN_PATH,
+                data={"token": "expected-token"},
+                headers=headers,
+                allow_redirects=False,
+            )
+
+        assert "Secure" in _session_cookie_attributes(login)
+
+    @pytest.mark.parametrize(
+        "headers",
+        [
+            {"X-Forwarded-Proto": "http"},
+            {"X-Forwarded-Proto": "http, https"},
+            {"Forwarded": "for=203.0.113.7;proto=http"},
+            {"X-Forwarded-Proto": ""},
+        ],
+        ids=["xfp-http", "xfp-chain-from-http", "forwarded-http", "xfp-blank"],
+    )
+    async def test_a_proxy_reporting_plain_http_leaves_it_not_secure(
+        self, headers: dict[str, str]
+    ) -> None:
+        app = _app_with_login("expected-token")
+
+        async with TestClient(TestServer(app)) as client:
+            login = await client.post(
+                LOGIN_PATH,
+                data={"token": "expected-token"},
+                headers=headers,
+                allow_redirects=False,
+            )
+
+        assert "Secure" not in _session_cookie_attributes(login)
 
 
 class TestCookieAuthenticatesLikeTheHeaderDoes:
@@ -1533,3 +1780,47 @@ class TestClientKey:
     def test_falls_back_to_unknown_when_neither_is_available(self) -> None:
         request = _fake_request(remote=None)
         assert client_key(request) == "unknown"
+
+
+class TestBrowserUsedHttps:
+    """The one rule every ``curu_auth`` ``Set-Cookie`` follows (ADR-006),
+    on its own: HTTPS if this connection is TLS, or if the proxy in front
+    of it reports that the browser's own hop was."""
+
+    def test_a_plain_connection_with_no_proxy_report_is_not_https(self) -> None:
+        from gate import browser_used_https
+
+        assert browser_used_https(make_mocked_request("GET", "/")) is False
+
+    def test_a_tls_connection_is_https(self) -> None:
+        from gate import browser_used_https
+
+        request = make_mocked_request(
+            "GET", "/", sslcontext=ssl.create_default_context()
+        )
+        assert browser_used_https(request) is True
+
+    @pytest.mark.parametrize(
+        ("headers", "expected"),
+        [
+            ({"X-Forwarded-Proto": "https"}, True),
+            ({"X-Forwarded-Proto": " HTTPS "}, True),
+            ({"X-Forwarded-Proto": "https, http"}, True),
+            ({"X-Forwarded-Proto": "http, https"}, False),
+            ({"X-Forwarded-Proto": "http"}, False),
+            ({"X-Forwarded-Proto": ""}, False),
+            ({"X-Forwarded-Proto": "wss"}, False),
+            ({"Forwarded": "proto=https"}, True),
+            ({"Forwarded": 'for="[2001:db8::1]";proto=HTTPS'}, True),
+            ({"Forwarded": "proto=https, proto=http"}, True),
+            ({"Forwarded": "proto=http, proto=https"}, False),
+            ({"Forwarded": "for=203.0.113.7"}, False),
+        ],
+    )
+    def test_a_proxy_report_names_the_browsers_own_hop(
+        self, headers: dict[str, str], expected: bool
+    ) -> None:
+        from gate import browser_used_https
+
+        request = make_mocked_request("GET", "/", headers=headers)
+        assert browser_used_https(request) is expected
