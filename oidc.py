@@ -55,10 +55,10 @@ try:
     # package context and would otherwise misreport this as unresolved.
     from .gate import (  # ty: ignore[unresolved-import]
         COOKIE_MAX_AGE_SECONDS,
-        COOKIE_NAME,
         RateLimiter,
         SessionStore,
         client_key,
+        set_session_cookie,
     )
 except ImportError:
     # Hermetic test context: tests/test_oidc.py imports this module bare
@@ -67,10 +67,10 @@ except ImportError:
     # exists for a relative import to resolve against.
     from gate import (
         COOKIE_MAX_AGE_SECONDS,
-        COOKIE_NAME,
         RateLimiter,
         SessionStore,
         client_key,
+        set_session_cookie,
     )
 
 #: The two OIDC routes -- reachable pre-session by definition, so
@@ -500,13 +500,10 @@ def build_oidc_routes(
 
         session_token = sessions.issue()
         redirect = web.HTTPFound("/")
-        redirect.set_cookie(
-            COOKIE_NAME,
-            session_token,
-            max_age=COOKIE_MAX_AGE_SECONDS,
-            httponly=True,
-            secure=True,
-            samesite="Strict",
+        # The same cookie, with the same scheme-dependent `Secure`, the
+        # credential form sets (ADR-002, ADR-006).
+        set_session_cookie(
+            redirect, request, session_token, max_age=COOKIE_MAX_AGE_SECONDS
         )
         raise redirect
 
