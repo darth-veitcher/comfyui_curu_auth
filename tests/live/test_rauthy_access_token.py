@@ -10,6 +10,9 @@ fixture sets that list through the admin API.
 
 from __future__ import annotations
 
+import base64
+import json
+
 import pytest
 from aiohttp import ClientSession
 
@@ -70,12 +73,22 @@ async def test_a_rauthy_token_for_another_resource_gets_401(
 async def test_a_rauthy_token_with_no_resource_gets_401(
     rauthy: Rauthy, start_gate: StartGate
 ) -> None:
-    """With no resource, rauthy puts only the client id in aud."""
+    """With no resource, the token does not hold the audience of the gate.
+
+    Each test starts a new gate with a new rate limiter, so a 429 from an
+    earlier test cannot come here: the answer must be 401.
+    """
     await _start(rauthy, start_gate)
+    token = _token(rauthy)
 
-    status = await _queue(rauthy, _token(rauthy))
+    status = await _queue(rauthy, token)
 
-    assert status in (401, 429)
+    assert status == 401
+    payload = token.split(".")[1]
+    claims = json.loads(base64.urlsafe_b64decode(payload + "=" * (-len(payload) % 4)))
+    assert rauthy.audience not in (
+        claims["aud"] if isinstance(claims["aud"], list) else [claims["aud"]]
+    )
 
 
 async def test_rauthy_refuses_a_resource_that_is_not_allowed(rauthy: Rauthy) -> None:
