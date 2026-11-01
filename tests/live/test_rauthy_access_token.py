@@ -31,6 +31,16 @@ async def _queue(rauthy: Rauthy, token: str) -> int:
         return response.status
 
 
+def _part(token: str, index: int) -> dict:
+    segment = token.split(".")[index]
+    return json.loads(base64.urlsafe_b64decode(segment + "=" * (-len(segment) % 4)))
+
+
+def _audiences(token: str) -> list[str]:
+    aud = _part(token, 1)["aud"]
+    return aud if isinstance(aud, list) else [aud]
+
+
 def _token(rauthy: Rauthy, **form: str) -> str:
     status, body = rauthy.program_token(**form)
     assert status == 200, body
@@ -54,9 +64,13 @@ async def test_a_rauthy_client_credentials_token_gets_200_on_queue(
     """Scenario: A real rauthy token."""
     await _start(rauthy, start_gate)
 
-    status = await _queue(rauthy, _token(rauthy, resource=rauthy.audience))
+    token = _token(rauthy, resource=rauthy.audience)
+
+    status = await _queue(rauthy, token)
 
     assert status == 200
+    assert _part(token, 0)["typ"] == "at+jwt"
+    assert rauthy.audience in _audiences(token)
 
 
 async def test_a_rauthy_token_for_another_resource_gets_401(
@@ -65,9 +79,13 @@ async def test_a_rauthy_token_for_another_resource_gets_401(
     """Scenario: A rauthy token for another resource."""
     await _start(rauthy, start_gate)
 
-    status = await _queue(rauthy, _token(rauthy, resource=OTHER_RESOURCE))
+    token = _token(rauthy, resource=OTHER_RESOURCE)
+
+    status = await _queue(rauthy, token)
 
     assert status == 401
+    assert OTHER_RESOURCE in _audiences(token)
+    assert rauthy.audience not in _audiences(token)
 
 
 async def test_a_rauthy_token_with_no_resource_gets_401(
@@ -84,11 +102,7 @@ async def test_a_rauthy_token_with_no_resource_gets_401(
     status = await _queue(rauthy, token)
 
     assert status == 401
-    payload = token.split(".")[1]
-    claims = json.loads(base64.urlsafe_b64decode(payload + "=" * (-len(payload) % 4)))
-    assert rauthy.audience not in (
-        claims["aud"] if isinstance(claims["aud"], list) else [claims["aud"]]
-    )
+    assert rauthy.audience not in _audiences(token)
 
 
 async def test_rauthy_refuses_a_resource_that_is_not_allowed(rauthy: Rauthy) -> None:
