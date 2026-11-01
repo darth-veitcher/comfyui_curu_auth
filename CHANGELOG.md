@@ -28,6 +28,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 <!-- version list -->
 
+## v2.1.0 (2026-11-01)
+
+### Features
+
+- **oidc**: Accept OIDC access tokens on the Bearer path, in an opt-in resource-server mode
+  ([#20](https://github.com/darth-veitcher/comfyui_curu_auth/pull/20),
+  [`fc6f9e8`](https://github.com/darth-veitcher/comfyui_curu_auth/commit/fc6f9e804294231ab21f75c84c2d8265c4260477))
+
+
 ## v2.0.0 (2026-11-01)
 
 ### Features
