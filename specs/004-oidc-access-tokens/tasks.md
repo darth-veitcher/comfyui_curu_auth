@@ -23,7 +23,7 @@ description: "Task list for 004-oidc-access-tokens"
 ## Phase 2: User Story 3 and User Story 4 - The token check and the key cache (P1, P2)
 
 - [x] T003-T [US3, US4] Write failing tests for each check of ADR-008 and for the key cache in `tests/test_oidc_access_tokens.py`.
-- [ ] T003-I [US3, US4] Add `IssuerKeys` and `verify_access_token` to `oidc.py`. The check needs the cache, so the two are one pair.
+- [x] T003-I [US3, US4] Add `IssuerKeys` and `verify_access_token` to `oidc.py`. The check needs the cache, so the two are one pair.
 
 ## Phase 3: User Story 1, User Story 3 and User Story 5 - The gate (P1, P2)
 
