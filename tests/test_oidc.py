@@ -16,6 +16,7 @@ import importlib.util
 import sys
 import types
 from pathlib import Path
+from typing import Any
 from urllib.parse import parse_qs, urlsplit
 
 import pytest
@@ -266,7 +267,7 @@ class TestFetchDiscoveryDocument:
 # Authorization-URL builder + In-Flight Auth Request store -- T013/T014.
 # --------------------------------------------------------------------------
 
-_CONFIG_KWARGS = {
+_CONFIG_KWARGS: dict[str, Any] = {
     "issuer_url": "https://idp.example.com",
     "client_id": "comfyui-curu-auth",
     "client_secret": "s3cr3t",
