@@ -207,17 +207,21 @@ class TestFetchDiscoveryDocument:
     async def test_successful_fetch_returns_the_parsed_document(self) -> None:
         from oidc import fetch_discovery_document
 
+        # The document must name the issuer it was fetched for (spec 003,
+        # ADR-007), so it names this test server's own origin.
         async def _discovery_handler(request: web.Request) -> web.Response:
-            return web.json_response(_DISCOVERY_DOCUMENT)
+            return web.json_response(
+                {**_DISCOVERY_DOCUMENT, "issuer": str(request.url.origin())}
+            )
 
         app = web.Application()
         app.router.add_get("/.well-known/openid-configuration", _discovery_handler)
 
         async with TestClient(TestServer(app)) as client:
-            base_url = str(client.make_url(""))
-            document = await fetch_discovery_document(base_url.rstrip("/"), timeout=5.0)
+            issuer = str(client.make_url("")).rstrip("/")
+            document = await fetch_discovery_document(issuer, timeout=5.0)
 
-        assert document == _DISCOVERY_DOCUMENT
+        assert document == {**_DISCOVERY_DOCUMENT, "issuer": issuer}
 
     async def test_timeout_raises_oidc_discovery_error(self) -> None:
         from oidc import OIDCDiscoveryError, fetch_discovery_document
