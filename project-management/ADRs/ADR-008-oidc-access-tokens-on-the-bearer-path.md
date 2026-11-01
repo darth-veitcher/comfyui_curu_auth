@@ -56,15 +56,17 @@ The gate adds an opt-in resource-server mode: the Bearer path also accepts a JWT
 
 Checks 1 to 4 need no network. A token that fails them never causes a read of the JWKS.
 
-**The keys.** The gate keeps the discovery document and the JWKS in memory. An unknown `kid` causes one new read, at most one time in 60 seconds. A failed read also starts the 60 seconds.
+**The keys.** The gate keeps the discovery document and the JWKS in memory. An unknown `kid` causes one new read, at most one time in 60 seconds. A failed read also starts the 60 seconds. The gate reads keys again when they are 1 hour old. So a removed key stops working. A failed read keeps the old keys.
 
 **The static credential.** The gate compares the static credential first, exactly as before (FR-004 of spec 002). Only a Bearer value that is not the static credential, and that has the shape of a JWT, goes to the token checks.
 
 **The rate limit.**
 
-- Each refused token is one failed attempt in the shared `RateLimiter`, as a wrong static credential is.
-- A valid token passes before the wait is checked, as a valid session cookie does. It also clears the failures of that address.
-- So the second attempt of comfy-mcp after a 401 passes when its new token is valid. It does not get 429 from the failure of the first token.
+- Each refused token is one failed attempt in the shared `RateLimiter`, also in a wait.
+- The gate checks a token also in a wait. So a refused token gets its real answer, 401, not 429, and a valid token passes. A valid token also clears the failures of that address.
+- So the second attempt of comfy-mcp after a 401 passes when its new token is valid. Two requests at once with one refused token both get 401, and both retry.
+- The static credential still waits first, as before.
+- When the gate has no keys of the issuer, the check cannot decide. The gate answers 503, counts no failure, and writes `identity provider unavailable`, not `authentication failure`. So fail2ban does not ban a caller for an outage of the identity provider.
 
 **The logs.**
 
@@ -84,6 +86,7 @@ The reasons are these:
 - **Good:** the static credential and its rate limit do not change.
 - **Cost:** a token cannot be revoked before its `exp`. The lifetime limit of 1 hour bounds the risk.
 - **Cost:** while an address waits, the gate still checks each JWT that it gets. Checks 1 to 4 are cheap, and the read of the JWKS has its own limit.
+- **Cost:** each refused token writes a log line, also in a wait. A caller can write one line for each request with a value such as `Bearer a.b.c`. fail2ban and crowdsec read these lines and block that caller at the network.
 - **Cost:** Google and Microsoft Entra ID cannot give tokens for programs that pass these checks.
 - **Escape route:** the gate gets the check as one function. A later change, for example token introspection, replaces that function only.
 

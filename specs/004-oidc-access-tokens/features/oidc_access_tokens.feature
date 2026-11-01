@@ -115,7 +115,12 @@ Feature: The Bearer path accepts OIDC access tokens
     When a valid token comes from the same address within one second
     Then the gate gives the answer of ComfyUI
 
-  Scenario: Two refused tokens
+  Scenario: Two refused tokens get 401
     Given a refused token
     When a second refused token comes within one second
-    Then the gate gives HTTP 429
+    Then the gate gives HTTP 401
+
+  Scenario: Two refused tokens double the wait
+    Given a refused token
+    When a second refused token comes within one second
+    Then the wait doubles

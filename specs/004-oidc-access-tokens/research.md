@@ -8,7 +8,7 @@ Source: comfy-mcp `src/comfy_mcp/comfyui.py` at `77aaa58`.
 - `_raise_for_status` raises `BackendRateLimited` on HTTP 429.
 - The `/ws` handshake waits `Retry-After` on 429, and 30 seconds on 401 or 403.
 
-Result: a retry inside the first wait of 1 second gets 429 if the gate checks the wait first. ADR-008 lets a valid token pass before the wait.
+Result: a retry inside the first wait of 1 second gets 429 if the gate checks the wait first. ADR-008 checks a token also in a wait: a valid token passes, and a refused one gets 401.
 
 ## R-2: rauthy 0.37.2 access tokens
 
@@ -32,4 +32,4 @@ Sources: comfy-mcp `tests/oidc/conftest.py`, curu-memory ADR-015.
 
 ## R-4: Leeway in `joserfc`
 
-`JWTClaimsRegistry` has one `leeway` for `exp`, `nbf` and `iat`. ADR-008 wants none for `exp` and 60 seconds for the others. So the gate validates with a leeway of 60 seconds, and then compares `exp` with the time itself.
+`JWTClaimsRegistry` has one `leeway` for `exp`, `nbf` and `iat`. ADR-008 wants none for `exp` and 60 seconds for the others. So the gate does not use `JWTClaimsRegistry` for access tokens. It compares `exp` (with no extra time), and `iat` and `nbf` (with 60 seconds), with the time itself.

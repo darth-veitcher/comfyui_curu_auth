@@ -5,7 +5,11 @@ Every rejected request writes one stable, greppable log line:
 ```
 comfyui_curu_auth: authentication failure from 203.0.113.7 (GET /object_info)
 comfyui_curu_auth: authentication failure from 203.0.113.7 (login form)
+comfyui_curu_auth: authentication failure from 203.0.113.7 (oidc callback: the person is not on the allowlist)
+comfyui_curu_auth: authentication failure from 203.0.113.7 (GET /queue: token refused: expired)
 ```
+
+The patterns below match the prefix `authentication failure from <IP>`, so each form matches. An outage of the identity provider writes `identity provider unavailable` or `OIDC login unavailable` instead, and these patterns do not match it.
 
 The gate itself has no ban list of its own — these files wire that log
 line into a real IP-blocking tool instead, so repeat offenders get

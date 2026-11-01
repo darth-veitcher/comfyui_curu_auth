@@ -14,7 +14,7 @@
 
 comfy-mcp can get its own access token for each backend with the `client_credentials` grant. The gate accepts only its static credential on the Bearer path. So a comfy-mcp backend behind this gate must use a static credential that never expires.
 
-An access token is a short-lived JWT that the identity provider gives to a program. A resource server is a service that checks such a token on each request.
+An access token is a short-lived JWT that the identity provider gives to a program. A resource server is a service that checks such a token on each request. The resource-server mode ("the mode") lets the gate accept such a token on the Bearer path.
 
 ## User Scenarios & Testing *(mandatory)*
 
@@ -103,7 +103,8 @@ comfy-mcp gets a new token after a 401 and tries again at once. That second atte
 **Acceptance Scenarios**:
 
 1. **Given** a refused token, **When** a valid token comes from the same address within one second, **Then** the gate gives the answer of ComfyUI.
-2. **Given** a refused token, **When** a second refused token comes within one second, **Then** the gate gives HTTP 429.
+2. **Given** a refused token, **When** a second refused token comes within one second, **Then** the gate gives HTTP 401.
+3. **Given** a refused token, **When** a second refused token comes within one second, **Then** the wait doubles.
 
 ---
 
@@ -134,10 +135,14 @@ comfy-mcp gets a new token after a 401 and tries again at once. That second atte
 - **FR-014**: `aud` MUST hold the configured audience.
 - **FR-015**: The token MUST hold each required scope.
 - **FR-016**: The gate MUST check the `/ws` handshake with the same code.
-- **FR-017**: Each refused token MUST count as one failed Bearer attempt in the shared `RateLimiter`.
+- **FR-017**: Each refused token MUST count as one failed Bearer attempt in the shared `RateLimiter`, also in a wait.
 - **FR-018**: A valid token MUST pass before the gate checks the wait.
 - **FR-019**: Each refused token MUST write the failure log line with its reason.
-- **FR-020**: No log line MUST hold a token or a part of a token.
+- **FR-020**: A log line MUST NOT hold a token or a part of a token.
+- **FR-021**: When the gate has no keys of the issuer, a token MUST get HTTP 503 with no failure (review finding).
+- **FR-022**: The gate MUST read keys again when they are 1 hour old (review finding).
+- **FR-023**: A refused token in a wait MUST get HTTP 401, not HTTP 429 (review finding).
+- **FR-024**: A header outside Latin-1 MUST be a wrong credential, not HTTP 500 (issue #19).
 
 ### Key Entities
 

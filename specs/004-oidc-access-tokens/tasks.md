@@ -44,8 +44,9 @@ description: "Task list for 004-oidc-access-tokens"
 
 - [x] T009 Add the mode and a section for programs of each provider to `README.md` and `docs/oidc-providers.md`.
 - [x] T010 Add the change to `CHANGELOG.md` and `AGENTS.md`.
-- [ ] T011 Run the quality gates, `uv run pytest` 3 times, the `rauthy` tier, and `beacon doctor --strict`.
-- [ ] T012 Get a review from `beacon-reviewer` in a new context, and fix each finding.
+- [x] T011 Run the quality gates, `uv run pytest` 3 times, the `rauthy` tier, and `beacon doctor --strict`.
+- [x] T012 Get a review from `beacon-reviewer` in a new context, and fix each finding.
+- [x] T013 Add failing tests and fixes for the review findings in `tests/test_oidc_access_tokens.py`, `tests/test_gate_with_token_check.py`, `gate.py` and `oidc.py`.
 
 ## Dependencies
 
