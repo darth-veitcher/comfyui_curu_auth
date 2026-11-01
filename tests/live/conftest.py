@@ -20,6 +20,8 @@ import shutil
 import socket
 import subprocess
 import time
+import urllib.error
+import urllib.parse
 import urllib.request
 import uuid
 from collections.abc import AsyncIterator, Awaitable, Callable, Iterator
@@ -39,6 +41,13 @@ USER_ID = "curuauthtestuser00000001"
 USER_EMAIL = "tester@localhost"
 USER_PASSWORD = "Test-Password-For-Rauthy-1"
 CALLBACK = "/curu-auth/oidc/callback"
+#: The client of a program, as comfy-mcp uses it for a backend (spec 004).
+PROGRAM_CLIENT_ID = "comfy-mcp-backend"
+PROGRAM_CLIENT_SECRET = "p" * 64
+#: Another resource that the program client may ask for.
+OTHER_RESOURCE = "http://other-backend.test"
+#: The bootstrap API key that sets allowed_resources. Test value only.
+API_KEY_SECRET = "k" * 64
 
 
 def free_port() -> int:
@@ -53,6 +62,29 @@ class Rauthy:
     issuer: str
     #: The port of the gate. The redirect URI of the login client names it.
     gate_port: int
+
+    @property
+    def audience(self) -> str:
+        """The audience of the gate: its own URL, as a resource indicator."""
+        return f"http://127.0.0.1:{self.gate_port}"
+
+    def program_token(self, **form: str) -> tuple[int, dict[str, object]]:
+        """A client_credentials token request, with the secret in the form,
+        because rauthy 0.37.2 refuses HTTP Basic on this grant."""
+        body = urllib.parse.urlencode(
+            {
+                "grant_type": "client_credentials",
+                "client_id": PROGRAM_CLIENT_ID,
+                "client_secret": PROGRAM_CLIENT_SECRET,
+                **form,
+            }
+        ).encode()
+        request = urllib.request.Request(f"{self.issuer}oidc/token", data=body)
+        try:
+            with urllib.request.urlopen(request, timeout=30) as response:
+                return response.status, json.load(response)
+        except urllib.error.HTTPError as error:
+            return error.code, json.load(error)
 
 
 def _bootstrap(directory: Path, gate_port: int) -> None:
@@ -82,7 +114,32 @@ def _bootstrap(directory: Path, gate_port: int) -> None:
         "enabled": True,
         "email_verified": True,
     }
-    (directory / "clients.json").write_text(json.dumps([login_client]))
+    program_client = {
+        "id": PROGRAM_CLIENT_ID,
+        "name": PROGRAM_CLIENT_ID,
+        "secret": {"Plain": PROGRAM_CLIENT_SECRET},
+        "redirect_uris": [],
+        "enabled": True,
+        "flows_enabled": ["client_credentials"],
+        "access_token_alg": "RS256",
+        "id_token_alg": "RS256",
+        "auth_code_lifetime": 60,
+        "access_token_lifetime": 300,
+        "scopes": ["openid", "comfy"],
+        # rauthy puts only the default scopes in a client_credentials token.
+        "default_scopes": ["openid", "comfy"],
+        "force_mfa": False,
+    }
+    access = [{"group": "Clients", "access_rights": ["read", "update"]}]
+    api_key = {
+        "name": "bootstrap",
+        "exp": int(time.time()) + 3600,
+        "access": access,
+        "secret": {"Plain": API_KEY_SECRET},
+    }
+    (directory / "clients.json").write_text(json.dumps([login_client, program_client]))
+    (directory / "scopes.json").write_text(json.dumps([{"name": "comfy"}]))
+    (directory / "api_keys.json").write_text(json.dumps([api_key]))
     (directory / "users.json").write_text(json.dumps([user]))
     # The container runs as user 10001, so it must read the files.
     for path in [directory, *directory.iterdir()]:
@@ -110,7 +167,8 @@ def rauthy(tmp_path_factory: pytest.TempPathFactory) -> Iterator[Rauthy]:
     )  # fmt: skip
     url = f"http://127.0.0.1:{port}"
     try:
-        deadline = time.monotonic() + 120
+        # rauthy makes its keys at the first start; that took 90 s on 2026-11-01.
+        deadline = time.monotonic() + 240
         while True:
             try:
                 with urllib.request.urlopen(
@@ -122,9 +180,30 @@ def rauthy(tmp_path_factory: pytest.TempPathFactory) -> Iterator[Rauthy]:
                 if time.monotonic() > deadline:
                     raise RuntimeError("rauthy did not start") from None
                 time.sleep(0.5)
-        yield Rauthy(url=url, issuer=discovery["issuer"], gate_port=gate_port)
+        server = Rauthy(url=url, issuer=discovery["issuer"], gate_port=gate_port)
+        # The bootstrap files cannot set allowed_resources in 0.37.2.
+        _allow_resources(url, PROGRAM_CLIENT_ID, [server.audience, OTHER_RESOURCE])
+        yield server
     finally:
         subprocess.run(["docker", "rm", "-f", name], capture_output=True, timeout=60)
+
+
+def _allow_resources(url: str, client_id: str, resources: list[str]) -> None:
+    headers = {
+        "Authorization": f"API-Key bootstrap${API_KEY_SECRET}",
+        "Content-Type": "application/json",
+    }
+    path = f"{url}/auth/v1/clients/{client_id}"
+    with urllib.request.urlopen(
+        urllib.request.Request(path, headers=headers), timeout=30
+    ) as response:
+        client = json.load(response)
+    client["allowed_resources"] = resources
+    request = urllib.request.Request(
+        path, data=json.dumps(client).encode(), headers=headers, method="PUT"
+    )
+    with urllib.request.urlopen(request, timeout=30):
+        pass
 
 
 async def _home(request: web.Request) -> web.Response:

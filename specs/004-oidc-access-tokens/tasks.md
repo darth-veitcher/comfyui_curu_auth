@@ -37,8 +37,8 @@ description: "Task list for 004-oidc-access-tokens"
 
 ## Phase 5: The live tier
 
-- [ ] T007 Add a `client_credentials` client and `allowed_resources` to `tests/live/conftest.py`.
-- [ ] T008 Get a rauthy token and call `GET /queue` in `tests/live/test_rauthy_access_token.py`.
+- [x] T007 Add a `client_credentials` client and `allowed_resources` to `tests/live/conftest.py`.
+- [x] T008 Get a rauthy token and call `GET /queue` in `tests/live/test_rauthy_access_token.py`.
 
 ## Phase 6: Documentation and polish
 
