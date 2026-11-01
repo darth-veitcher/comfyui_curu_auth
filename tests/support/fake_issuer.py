@@ -24,7 +24,7 @@ from aiohttp import web
 from aiohttp.test_utils import TestServer
 from joserfc import jwt
 from joserfc.errors import SecurityWarning
-from joserfc.jwk import ECKey, OKPKey, RSAKey
+from joserfc.jwk import ECKey, KeyParameters, OKPKey, RSAKey
 
 CLIENT_ID = "comfyui-curu-auth"
 CLIENT_SECRET = "fake-client-secret"
@@ -74,7 +74,7 @@ class FakeIssuer:
         self._server: TestServer | None = None
 
     def add_key(self, kid: str, alg: str) -> None:
-        parameters = {"kid": kid}
+        parameters: KeyParameters = {"kid": kid}
         if alg.startswith(("RS", "PS")):
             key: Any = RSAKey.generate_key(2048, parameters=parameters, private=True)
         elif alg == "ES256":
