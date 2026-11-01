@@ -217,6 +217,21 @@ async def _queue(request: web.Request) -> web.Response:
     return web.json_response({"queue_running": [], "queue_pending": []})
 
 
+#: The app key of the count of ``/ws`` handshakes that reached ComfyUI.
+WS_HANDSHAKES = web.AppKey("ws_handshakes", list)
+
+
+async def _ws(request: web.Request) -> web.WebSocketResponse:
+    """A stand-in for ComfyUI's ``/ws``. It counts each handshake that the
+    gate let through, and then waits until the client closes."""
+    request.app[WS_HANDSHAKES].append(request.path)
+    socket_ = web.WebSocketResponse()
+    await socket_.prepare(request)
+    async for _ in socket_:
+        pass
+    return socket_
+
+
 StartGate = Callable[[dict[str, str]], Awaitable[web.Application]]
 
 
@@ -248,6 +263,8 @@ async def start_gate(
         )
         app.router.add_get("/", _home)
         app.router.add_get("/queue", _queue)
+        app.router.add_get("/ws", _ws)
+        app[WS_HANDSHAKES] = []
         runner = web.AppRunner(app)
         await runner.setup()
         await web.TCPSite(runner, "127.0.0.1", rauthy.gate_port).start()

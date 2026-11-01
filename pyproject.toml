@@ -83,8 +83,9 @@ testpaths = ["tests"]
 markers = [
     "system: needs a full docker-compose harness (opt-in, not run by default)",
     "rauthy: needs Docker, rauthy 0.37.2 and the `live` group (opt-in, not run by default)",
+    "comfy_mcp: needs the rauthy tier and git access to the private comfy-mcp repository (opt-in, not run by default)",
 ]
-addopts = "-ra --strict-markers --import-mode=importlib -m \"not system and not rauthy\""
+addopts = "-ra --strict-markers --import-mode=importlib -m \"not system and not rauthy and not comfy_mcp\""
 pythonpath = ["."]
 asyncio_mode = "auto"
 
