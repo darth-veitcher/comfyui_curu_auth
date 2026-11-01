@@ -214,7 +214,28 @@ async def _home(request: web.Request) -> web.Response:
 
 async def _queue(request: web.Request) -> web.Response:
     """A stand-in for ComfyUI's ``GET /queue``."""
+    request.app[QUEUE_CALLS].append(request.headers.get("Authorization"))
     return web.json_response({"queue_running": [], "queue_pending": []})
+
+
+#: The app key of the ``/ws`` handshakes that reached ComfyUI and became a
+#: websocket. Each entry is the ``Authorization`` value of the handshake. It
+#: stays in memory: a test compares it and never prints it.
+WS_HANDSHAKES = web.AppKey("ws_handshakes", list)
+#: The app key of the ``Authorization`` value of each ``GET /queue`` that
+#: reached ComfyUI. In memory only, as above.
+QUEUE_CALLS = web.AppKey("queue_calls", list)
+
+
+async def _ws(request: web.Request) -> web.WebSocketResponse:
+    """A stand-in for ComfyUI's ``/ws``. It records each handshake that the
+    gate let through, and then waits until the client closes."""
+    socket_ = web.WebSocketResponse()
+    await socket_.prepare(request)
+    request.app[WS_HANDSHAKES].append(request.headers.get("Authorization"))
+    async for _ in socket_:
+        pass
+    return socket_
 
 
 StartGate = Callable[[dict[str, str]], Awaitable[web.Application]]
@@ -248,6 +269,9 @@ async def start_gate(
         )
         app.router.add_get("/", _home)
         app.router.add_get("/queue", _queue)
+        app.router.add_get("/ws", _ws)
+        app[WS_HANDSHAKES] = []
+        app[QUEUE_CALLS] = []
         runner = web.AppRunner(app)
         await runner.setup()
         await web.TCPSite(runner, "127.0.0.1", rauthy.gate_port).start()

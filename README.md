@@ -250,12 +250,13 @@ uv run pytest
 
 The default tests need no ComfyUI and no network. They run the gate against a small `aiohttp` application, and the OIDC login against a fake provider with RSA, EC and Ed25519 keys.
 
-Two test tiers do not run by default:
+Three test tiers do not run by default:
 
 | Tier | Command | What it needs and checks |
 |---|---|---|
 | `system` | `uv run pytest -m system` | Docker. It starts a CPU-only ComfyUI with this node, and Authelia as the OIDC provider. It checks the routes, the `/ws` handshake, the wait and the OIDC login. |
 | `rauthy` | `uv run --group live pytest -m rauthy` | Docker and Chromium. It starts rauthy 0.37.2, logs in through it in a browser with an EdDSA ID token, and calls `GET /queue` with a `client_credentials` token. |
+| `comfy_mcp` | `uv run --group live pytest -m comfy_mcp` | Docker and git access to the private comfy-mcp repository. It starts rauthy 0.37.2 and comfy-mcp 0.1.0 with an `oidc` backend table. comfy-mcp then reads the queue through the gate with its own token. |
 
 To install Chromium for the `rauthy` tier, run `uv run --group live playwright install chromium`.
 

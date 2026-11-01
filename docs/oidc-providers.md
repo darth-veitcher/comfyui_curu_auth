@@ -197,6 +197,29 @@ A program can send an access token of the identity provider in the Bearer header
 |---|---|
 | **Not supported for programs.** Google access tokens are opaque, and Google has no `client_credentials` grant. | Provider documentation |
 
+### Connect comfy-mcp
+
+comfy-mcp gets its own token for each backend. Give the backend an `oidc` table in the configuration file of comfy-mcp. This example is for rauthy, with the gate at `https://comfyui.example.com`:
+
+```toml
+[backends.gated]
+url = "https://comfyui.example.com"
+
+[backends.gated.oidc]
+issuer = "https://idp.example.com/auth/v1/"
+client_id = "comfy-mcp-backend"
+client_secret_env = "GATED_OIDC_SECRET"
+resource = "https://comfyui.example.com"
+```
+
+Set `COMFYUI_CURU_AUTH_OIDC_AUDIENCE` of the gate to the same URL as `resource`. Put the client secret in the variable that `client_secret_env` names.
+
+| Fact | Source |
+|---|---|
+| comfy-mcp 0.1.0 with this table reads the queue through the gate, with its own token. `list_backends` shows the backend as online. | Tested live (rauthy 0.37.2) |
+| comfy-mcp sends the same token on the `/ws` handshake, and the gate lets it through. | Tested live (rauthy 0.37.2) |
+| With a token for another resource, `get_queue` gives `backend_auth_failed`, not `backend_rate_limited`. The gate refuses the first try and the one retry of comfy-mcp for the wrong audience. The retry falls in the wait of the gate and still gets 401. | Tested live (rauthy 0.37.2) |
+
 ## Fix a login or an access token that fails
 
 The gate writes one line for each login that the callback refuses, and for each refused access token. The reason follows `oidc callback:` or `token refused:`. The line never holds a token or a claim value. A fault at the start of the login gives HTTP 503 and a line with `OIDC login unavailable:`.
