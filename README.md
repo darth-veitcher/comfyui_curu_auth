@@ -2,13 +2,21 @@
 
 ## What is this
 
-A ComfyUI custom node that puts a bearer-token credential in front of your
-whole ComfyUI backend — every route, including the `/ws` connection its
-progress streaming depends on. No accounts, no config file, no external
-service: install it, restart ComfyUI, and it prints a fresh credential to
-the console. That's the whole setup.
+comfyui_curu_auth is a ComfyUI custom node that puts a credential in front of your whole ComfyUI server. It covers each route, also the `/ws` connection that progress updates use. It needs no accounts, no configuration file and no external service. Install it and restart ComfyUI, and it prints a new credential to the console. It is for a person who runs ComfyUI on a home computer or on a rented GPU.
 
 <img src="docs/screenshots/login.png" width="480" alt="Login screen">
+
+## What you can do
+
+| Task | Command or setting | Section |
+|---|---|---|
+| Call ComfyUI from a program | `Authorization: Bearer <credential>` | [Call ComfyUI from a program](#call-comfyui-from-a-program) |
+| Log in from a browser | Open `/curu-auth/login` | [Log in from a browser](#log-in-from-a-browser) |
+| Keep the same credential | `COMFYUI_CURU_AUTH_TOKEN` | [Keep the same credential after a restart](#keep-the-same-credential-after-a-restart) |
+| Log in with your identity provider | `COMFYUI_CURU_AUTH_OIDC_ISSUER_URL` and 4 more | [Log in through your identity provider](#log-in-through-your-identity-provider) |
+| Choose HTTPS or plain HTTP | `X-Forwarded-Proto: https` at your proxy | [Use HTTPS or plain HTTP](#use-https-or-plain-http) |
+| Understand a 429 | Wait for `Retry-After` | [Recover from repeated failures](#recover-from-repeated-failures) |
+| Block attackers at the firewall | `contrib/fail2ban`, `contrib/crowdsec` | [Block repeat offenders at the firewall](#block-repeat-offenders-at-the-firewall) |
 
 ## Install
 
@@ -19,183 +27,198 @@ git clone https://github.com/darth-veitcher/comfyui_curu_auth
 
 ## Quickstart
 
-Restart ComfyUI:
+1. Restart ComfyUI. The console shows the credential:
 
+   ```text
+   comfyui-curu-auth gate active. Credential:
+     Yx3fQvR8...
+   ```
+
+2. Open ComfyUI in your browser. The gate sends you to its login page.
+3. Paste the credential, and select "Log in". ComfyUI opens.
+
+You cannot get the credential over the network. It goes only to the console. This is deliberate: an exchange of credentials over the network would be a new point of attack.
+
+## Call ComfyUI from a program
+
+Send the credential in the `Authorization` header of each request, also on the `/ws` handshake:
+
+```bash
+curl -H "Authorization: Bearer $COMFYUI_CURU_AUTH_TOKEN" http://127.0.0.1:8188/queue
 ```
-comfyui-curu-auth gate active. Credential:
-  Yx3fQvR8...
-```
 
-Use that credential two ways:
+A correct credential gives the normal answer of ComfyUI. A missing or wrong credential gives HTTP 401 with `{"detail": "missing or invalid credential"}`.
 
-- **Automated clients** — send `Authorization: Bearer <credential>` with every request.
-- **A real browser** — open ComfyUI's own UI directly and paste the credential into the login form the gate serves at `/curu-auth/login`. A `HttpOnly` / `SameSite=Strict` cookie carries the session from there (30 days); the credential itself is never transmitted a second time. The cookie is also `Secure` whenever you reached ComfyUI over HTTPS — see [HTTPS, plain HTTP, and the session cookie](#https-plain-http-and-the-session-cookie).
+## Log in from a browser
 
-There's no way to fetch the credential over the network — it only ever
-prints to the console. That's deliberate: no automated credential
-exchange means no new attack surface for one.
+Open `/curu-auth/login`, or any page of ComfyUI, and paste the credential. The gate then sets a session cookie, `curu_auth`, for 30 days. The cookie is `HttpOnly` and `SameSite=Strict`. It holds a separate session token, so the browser never sends the credential again.
 
-## Pinning a credential
+The session lives in memory. A restart of ComfyUI ends each session, and the browser shows the login page again.
+
+## Keep the same credential after a restart
+
+The gate keeps the active credential in `user/default/comfyui_curu_auth/credential` under ComfyUI. It uses that file at each restart. So the credential stays the same, also after a reboot from ComfyUI-Manager.
+
+To choose the credential yourself, set `COMFYUI_CURU_AUTH_TOKEN`:
 
 ```bash
 export COMFYUI_CURU_AUTH_TOKEN="$(python3 -c 'import secrets; print(secrets.token_urlsafe(32))')"
 ```
 
-Set it however you start ComfyUI — shell export, a systemd unit's
-`Environment=`, a `docker-compose.yml` `environment:` entry.
+Set it where you start ComfyUI: a shell `export`, the `Environment=` of a systemd unit, or the `environment:` of a `docker-compose.yml`. The variable always wins over the file, and the gate writes its value to the file.
 
-Either way, the active credential — pinned or auto-generated — is persisted
-under ComfyUI's own `user/default/comfyui_curu_auth/credential` and reused
-on every later restart, so it stays the same even if you never set the
-env var, and even across a Manager-triggered reboot (which reuses the
-process's existing environment, so it wouldn't otherwise pick up an env
-var set after ComfyUI first started). Setting the env var always takes
-precedence and updates the persisted file to match.
+A reboot from ComfyUI-Manager keeps the old environment of the process. A variable that you set after the first start reaches the gate only through the file.
 
-## Optional: log in through your own identity provider
+## Log in through your identity provider
 
-```bash
-export COMFYUI_CURU_AUTH_OIDC_ISSUER_URL="https://your-idp.example.com"
-export COMFYUI_CURU_AUTH_OIDC_CLIENT_ID="comfyui-curu-auth"
-export COMFYUI_CURU_AUTH_OIDC_CLIENT_SECRET="<registered client secret>"
-export COMFYUI_CURU_AUTH_OIDC_REDIRECT_URI="https://your-comfyui-host/curu-auth/oidc/callback"
-```
+An identity provider is a service that logs people in, for example rauthy, Authentik, Keycloak or Google. The gate can use one with OpenID Connect (OIDC). The credential and the Bearer header keep working.
 
-All four are optional, but MUST be set together — any subset (e.g. an
-issuer URL with no client secret) is treated exactly like none at all:
-ComfyUI starts with no OIDC routes and no OIDC option on the login page,
-same as today. Set all four and restart, and the login page offers "Log
-in with your identity provider" alongside the existing credential field
-— a successful login there lands you in the same `curu_auth` session
-cookie the credential-based form already sets. The Bearer-header path for
-automated clients is unaffected either way.
+1. Register a confidential client at the provider. Use PKCE `S256` and an asymmetric signing key, for example RS256 or EdDSA.
+2. Register the redirect URI `https://<your ComfyUI host>/curu-auth/oidc/callback`.
+3. Copy the issuer exactly from `<issuer>/.well-known/openid-configuration`, with or without its `/` at the end.
+4. Set the four settings of the client:
 
-See [`specs/002-oidc-login/quickstart.md`](specs/002-oidc-login/quickstart.md)
-for a full walkthrough, including running the live suite against a real
-Authelia instance.
+   ```bash
+   export COMFYUI_CURU_AUTH_OIDC_ISSUER_URL="https://idp.example.com/application/o/comfyui/"
+   export COMFYUI_CURU_AUTH_OIDC_CLIENT_ID="comfyui-curu-auth"
+   export COMFYUI_CURU_AUTH_OIDC_CLIENT_SECRET="<client secret>"
+   export COMFYUI_CURU_AUTH_OIDC_REDIRECT_URI="https://comfyui.example.com/curu-auth/oidc/callback"
+   ```
 
-## HTTPS, plain HTTP, and the session cookie
+5. Set who can log in, for example:
 
-The session cookie is `Secure` exactly when your browser reached ComfyUI
-over HTTPS:
+   ```bash
+   export COMFYUI_CURU_AUTH_OIDC_ALLOWED_SUBJECTS="<sub of each person>"
+   ```
 
-- ComfyUI serves TLS itself (`--tls-keyfile` / `--tls-certfile`), **or**
-- a reverse proxy in front of it terminates TLS and says so, with
-  `X-Forwarded-Proto: https` or the standard `Forwarded: proto=https`.
-  RunPod's proxy is this case.
+6. Restart ComfyUI. The login page now has "Log in with your identity provider".
 
-Otherwise, as on a host you reach at `http://<lan-address>:8188`, the
-cookie is set without `Secure`. Browsers won't store a `Secure` cookie
-from a plain-HTTP page (localhost excepted), so a correct credential would
-otherwise send you straight back to the login form. `HttpOnly`,
-`SameSite=Strict` and the 30-day lifetime are the same either way.
+A successful login gives the same `curu_auth` cookie as the credential form. [Connect an OIDC provider](docs/oidc-providers.md) gives the steps for rauthy, Authentik, Keycloak, Auth0, Okta, Microsoft Entra ID, Google and Authelia.
 
-Plain HTTP is a choice with a cost. On it, the session cookie crosses the
-network unencrypted, just as the credential you type into the form and
-every `Authorization` header already do. Anyone who can watch that
-network can replay them. Use HTTPS wherever the network between your
-browser and ComfyUI isn't one you trust.
+| Setting | Meaning | Default |
+|---|---|---|
+| `COMFYUI_CURU_AUTH_OIDC_ISSUER_URL` | The issuer, exactly as the discovery document gives it. | none |
+| `COMFYUI_CURU_AUTH_OIDC_CLIENT_ID` | The client id at the provider. | none |
+| `COMFYUI_CURU_AUTH_OIDC_CLIENT_SECRET` | The client secret at the provider. | none |
+| `COMFYUI_CURU_AUTH_OIDC_REDIRECT_URI` | The callback URL that the provider sends the browser to. | none |
+| `COMFYUI_CURU_AUTH_OIDC_ALLOWED_SUBJECTS` | The `sub` values that can log in, with a comma between them. | empty |
+| `COMFYUI_CURU_AUTH_OIDC_ALLOWED_EMAILS` | The emails that can log in. An email matches only when `email_verified` is true. | empty |
+| `COMFYUI_CURU_AUTH_OIDC_ALLOWED_DOMAIN` | One Google Workspace domain, compared with the `hd` claim. | empty |
+| `COMFYUI_CURU_AUTH_OIDC_ALLOW_ANY_USER` | `true` lets each person that the provider accepts log in. | `false` |
+| `COMFYUI_CURU_AUTH_OIDC_SCOPES` | The scopes of the login, with a space or a comma between them. The gate always adds `openid`. | `openid profile email` |
 
-Behind a TLS-terminating proxy, the gate can only know the browser used
-HTTPS if the proxy tells it. To check yours, log in through it and look
-at the response's `Set-Cookie`: it must end in `; Secure`. If it doesn't,
-your proxy isn't sending `X-Forwarded-Proto` or `Forwarded`, and you
-should configure it to. See
-[ADR-006](project-management/ADRs/ADR-006-session-cookie-secure-follows-the-browsers-scheme.md).
+The OIDC login is off until the four client settings are set. If one of them is missing, the gate starts as if none were set.
 
-## Repeated failures back off — on every path
+With the four client settings but no allowlist, the OIDC login also stays off. The console then shows `OIDC login is off: set ...`. Set an allowlist, or `ALLOW_ANY_USER=true` when the provider already limits who can log in. Never set `ALLOW_ANY_USER=true` for Google, because each Google account can log in there.
+
+The gate refuses a login when one of these is true:
+
+- The discovery document names another issuer, or an endpoint uses plain `http` on a host that is not loopback.
+- The ID token uses `none` or an HMAC algorithm such as HS256.
+- The ID token has no `exp` or no `iat`, or it expired more than 60 seconds ago.
+- The person is not on the allowlist.
+
+A refused login gives HTTP 401 and counts as a failed attempt.
+
+## Use HTTPS or plain HTTP
+
+The session cookie is `Secure` when your browser reached ComfyUI over HTTPS. The gate knows this in two cases:
+
+- ComfyUI serves TLS itself, with `--tls-keyfile` and `--tls-certfile`.
+- A reverse proxy ends TLS and sends `X-Forwarded-Proto: https` or `Forwarded: proto=https`. The proxy of RunPod does this.
+
+On plain HTTP, for example `http://<lan-address>:8188`, the cookie has no `Secure`. A browser does not keep a `Secure` cookie from a plain HTTP page, except on localhost. `HttpOnly`, `SameSite=Strict` and the 30 days do not change.
+
+Plain HTTP has a cost. The session cookie, the credential in the form and each `Authorization` header cross the network with no encryption. A person who can watch that network can use them again. Use HTTPS on each network that you do not trust.
+
+To check your proxy, log in through it and read the `Set-Cookie` of the response. It must end in `; Secure`. If it does not, configure your proxy to send `X-Forwarded-Proto` or `Forwarded`.
+
+## Recover from repeated failures
 
 <img src="docs/screenshots/rate-limited.png" width="480" alt="Rate-limited login screen with a live countdown">
 
-Wrong credential enough times in a row, from either the login form or the
-Bearer-header path automated clients use, and that client gets `429` with
-a growing `Retry-After` (1s → 2s → 4s → ... capped at 5 minutes),
-resetting on a correct attempt. The login page's own countdown updates
-live client-side — no refreshing to see if you can try again yet.
+After a wrong credential, the gate makes that client wait before its next try. The wait doubles after each failure: 1 s, 2 s, 4 s, and up to 5 minutes. During the wait, each request gets HTTP 429 with `Retry-After`. A correct attempt sets the wait to zero again. The login page shows a countdown, so you do not need to reload it.
 
-Only a request that actually **offered** a credential and got it wrong
-counts. A request with no `Authorization` header, no session cookie, and
-no token in the login form tested nothing, so it never consumes the
-backoff budget — it still gets its `401` and still writes the log line
-below, but a health check or readiness probe polling unauthenticated can
-no longer lock out the legitimate client that shares its address. Anything
-non-blank does count, however malformed, so this is not a way around the
-backoff: to test a credential you have to send one.
+The same wait applies to the login form, the Bearer header and the OIDC login. A session that is already open is never blocked.
 
-A session cookie left over from before a ComfyUI restart is a special
-case of "offered and wrong": sessions live in memory and do not survive a
-restart, but the browser's 30-day cookie does. That request still counts —
-a cookie the server does not recognise is a wrong credential — but the
-response now **expires the cookie**, so the browser stops replaying it.
-Without that, an open ComfyUI tab re-opens `/ws` every 300ms forever and
-renews the maximum backoff indefinitely, locking its own address out of
-the login form needed to recover.
+Only a request that **offered** a credential counts as a failure. A request with no `Authorization` header, no session cookie and no form token gets HTTP 401, but it does not start a wait. So a health check that has no credential cannot lock out a real client at the same address. Each value that is not blank counts, also a malformed one.
 
-The credential itself (256 bits of entropy) is already computationally
-infeasible to brute-force — this bounds the guessing a scanner can do
-against either path, nothing more. An already-established browser session
-is never affected by backoff accrued elsewhere, and is never expired.
+A session cookie from before a restart is a wrong credential, and it counts. The gate then expires that cookie in its answer, so the browser stops sending it. Without this, an open ComfyUI tab would renew the 5-minute wait forever.
 
-## Blocking repeat offenders at the firewall
+The credential has 256 bits of entropy, so a guess cannot succeed. The wait limits the number of guesses and log lines that a scanner can make.
 
-Every rejected request also writes one stable, greppable log line:
+## Block repeat offenders at the firewall
 
-```
+The gate writes one line for each refused request:
+
+```text
 comfyui_curu_auth: authentication failure from 203.0.113.7 (GET /object_info)
 comfyui_curu_auth: authentication failure from 203.0.113.7 (login form)
-comfyui_curu_auth: authentication failure from 203.0.113.7 (oidc callback)
+comfyui_curu_auth: authentication failure from 203.0.113.7 (oidc callback: the person is not on the allowlist)
 ```
 
-Ready-to-install fail2ban and crowdsec config, plus step-by-step
-install instructions for each, live in
-[`contrib/`](contrib/README.md).
+The text after `from` is the address of the client. The text in parentheses is the path or the reason, and it never holds a credential or a token. [`contrib/`](contrib/README.md) has configurations for fail2ban and crowdsec, with the steps to install them.
 
-## How it works
+## Limits
 
-This node reaches into ComfyUI's own already-running
-`server.PromptServer.instance.app` at import time and appends one
-`aiohttp` middleware to it. Because ComfyUI registers every route onto
-that same `app`, one middleware covers all of them, including the `/ws`
-websocket handshake — verified directly against ComfyUI's own `server.py`.
+- The gate has one credential for all people. It gives no roles and no separate accounts. The OIDC allowlist decides who logs in, not what they can do.
+- The gate accepts one OIDC provider at a time.
+- A multi-tenant Microsoft Entra ID app is not supported. Use the issuer of one tenant.
+- Sessions live in memory. A restart of ComfyUI ends each session.
+- The address of a client comes from `X-Forwarded-For` when a proxy sends it. A client that can reach ComfyUI without the proxy can change that header, and so avoid the wait.
 
-The credential is `secrets.token_urlsafe(32)`, checked with
-`secrets.compare_digest` (constant-time). No custom node classes are
-registered and this extension serves no JS of its own beyond the login
-page's own inline countdown script — it's a server-side-only gate.
+## Technical notes
 
-## Tests
+The node adds one `aiohttp` middleware to `server.PromptServer.instance.app` when ComfyUI imports it. ComfyUI registers each route on that app, so the middleware covers each route, also the `/ws` handshake. The node has no node classes, and it serves no JavaScript except the countdown on the login page.
+
+The credential comes from `secrets.token_urlsafe(32)`. The gate compares it with `secrets.compare_digest`, in constant time.
+
+An error in the OIDC settings never stops the node. ComfyUI skips a node whose import fails, so the gate would be off. The gate writes the error and keeps only the OIDC login off.
+
+Decisions:
+
+- [ADR-002](project-management/ADRs/ADR-002-oidc-session-sharing-and-test-idp.md): the OIDC login uses the same session cookie.
+- [ADR-003](project-management/ADRs/ADR-003-gate-public-paths-generalization.md): the public paths of the gate.
+- [ADR-004](project-management/ADRs/ADR-004-only-offered-credentials-count-as-attempts.md): only an offered credential counts as an attempt.
+- [ADR-005](project-management/ADRs/ADR-005-expire-a-stale-session-cookie-rather-than-exempt-it.md): the gate expires a stale session cookie.
+- [ADR-006](project-management/ADRs/ADR-006-session-cookie-secure-follows-the-browsers-scheme.md): `Secure` follows the scheme of the browser.
+- [ADR-007](project-management/ADRs/ADR-007-oidc-issuer-algorithms-and-allowlist.md): the issuer, the algorithms and the allowlist of the OIDC login.
+
+The credential scheme comes from [curu](https://github.com/darth-veitcher/curu). The licence is MIT, see [LICENSE](LICENSE).
+
+## Develop
 
 ```bash
 uv sync
 uv run pytest
 ```
 
-`gate.py`'s logic (credential generation, the middleware, sessions, rate
-limiting) runs against a real, minimal `aiohttp.web.Application` via
-`aiohttp.test_utils` — no ComfyUI installation needed.
+The default tests need no ComfyUI and no network. They run the gate against a small `aiohttp` application, and the OIDC login against a fake provider with RSA, EC and Ed25519 keys.
 
-`__init__.py` itself (the real ComfyUI-side wiring) has its own opt-in,
-live test suite instead of only a by-hand check:
+Two test tiers do not run by default:
 
-```bash
-uv run pytest -m system
-```
+| Tier | Command | What it needs and checks |
+|---|---|---|
+| `system` | `uv run pytest -m system` | Docker. It starts a CPU-only ComfyUI with this node, and Authelia as the OIDC provider. It checks the routes, the `/ws` handshake, the wait and the OIDC login. |
+| `rauthy` | `uv run --group live pytest -m rauthy` | Docker and Chromium. It starts rauthy 0.37.2 and logs in through it in a browser, with an EdDSA ID token. |
 
-Brings up a real, CPU-only ComfyUI instance in Docker (this repo's own
-working tree installed as the custom node — see
-[`specs/001-docker-comfyui-harness/quickstart.md`](specs/001-docker-comfyui-harness/quickstart.md))
-and verifies the gate against it directly: unauthenticated rejection on
-HTTP routes and the `/ws` handshake, correct-credential success, rate-limit
-backoff, and clean teardown/restart. Never runs as part of the plain
-`uv run pytest` above — opt-in only, and no GPU/rendering involved.
+To install Chromium for the `rauthy` tier, run `uv run --group live playwright install chromium`.
 
-## Origin
+The quality gates are `uv run ruff check`, `uv run ruff format`, `uv run ty check` and `beacon doctor --strict`. `AGENTS.md` gives the rules for a change.
 
-Extracted from [curu](https://github.com/darth-veitcher/curu)'s own
-`local-network-auth-and-encryption` epic, where this gate's credential
-scheme was originally designed to harmonise with curu's own
-control-plane API — reused here standalone, not re-derived.
+## Glossary
 
-## License
-
-MIT — see [LICENSE](LICENSE).
+| Term | Meaning |
+|---|---|
+| Allowlist | The list of people who can get a session through the OIDC login. |
+| Bearer header | The header `Authorization: Bearer <credential>` that a program sends. |
+| Credential | The secret that the gate prints at start. It opens ComfyUI. |
+| Discovery document | The JSON document at `<issuer>/.well-known/openid-configuration`. It names the endpoints and the keys of a provider. |
+| ID token | The signed token that the provider gives after a login. It names the person. |
+| Identity provider | A service that logs people in, for example rauthy or Authentik. Also "provider". |
+| Issuer | The URL that names a provider in its tokens. |
+| OIDC | OpenID Connect, the standard that the gate uses to talk to a provider. |
+| PKCE | Proof Key for Code Exchange. It stops a stolen login code from being used. |
+| Session cookie | The `curu_auth` cookie that keeps a browser logged in for 30 days. |
+| `sub` | The subject claim: a fixed id of the person at the provider. |
+| Wait | The time a client must wait after a failure before it can try again (backoff). |

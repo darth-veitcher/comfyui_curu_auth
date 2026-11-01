@@ -1,0 +1,60 @@
+# AGENTS.md
+
+## What this repository is
+
+comfyui_curu_auth is a ComfyUI custom node that gates each route of ComfyUI with a credential, a session cookie and an optional OIDC login. ComfyUI loads it from `custom_nodes/`; it is never built as a wheel. [curu](https://github.com/darth-veitcher/curu) and comfy-mcp are clients of this gate, and curu-memory shares its OIDC rules.
+
+## Commands
+
+| Purpose | Command |
+|---|---|
+| Set up | `uv sync` |
+| Lint and format | `uv run ruff check --fix && uv run ruff format` |
+| Check types | `uv run ty check` |
+| Run the default tests | `uv run pytest` |
+| Run the ComfyUI and Authelia tier (marker `system`) | `uv run pytest -m system` |
+| Run the rauthy tier (marker `rauthy`) | `uv run --group live pytest -m rauthy` |
+| Install Chromium for the rauthy tier | `uv run --group live playwright install chromium` |
+| Check the project health | `beacon doctor --strict` |
+| Check the documentation | `beacon docs check` |
+
+A release is automatic. Each merge to `main` runs python-semantic-release in `.github/workflows/release.yml`. Do not push tags by hand.
+
+## Rules
+
+- Write a failing test first, and commit it alone. Then write the code, and commit it alone ([constitution](.specify/memory/constitution.md), article IV).
+- Use Conventional Commits. The `commit-msg` hook checks them. Never use `--no-verify`.
+- Cut each branch from `main`, and open each pull request to `main`. There is no `develop` branch.
+- Never weaken the static credential path for an optional login method (article I).
+- An error in an optional setting must keep the gate on. Never raise from `__init__.py`, because ComfyUI then skips the node (article III).
+- Never log a credential, a token, or a part of a token.
+- A change to the log line `authentication failure from <IP>` breaks fail2ban and crowdsec. Say so in the pull request.
+- A change that a user can see also changes `README.md` or `docs/` in the same pull request.
+
+## Where things are
+
+| Path | Contents |
+|---|---|
+| `gate.py` | The credential, the middleware, the sessions, the rate limiter and the login form. |
+| `oidc.py` | The OIDC login: discovery, keys, ID-token rules, the allowlist and the routes. |
+| `__init__.py` | The wiring that ComfyUI imports. It reads the environment. |
+| `tests/` | The default tests. `tests/support/fake_issuer.py` is the fake OIDC provider. |
+| `tests/system/` | The `system` tier, with `docker-compose.yml` and `docker/`. |
+| `tests/live/` | The `rauthy` tier. |
+| `contrib/` | The fail2ban and crowdsec configurations. |
+| `docs/` | The guides for people. |
+| `specs/` | One folder for each spec: spec, plan, tasks and features. |
+| `project-management/` | The ADRs, the epics and the roadmap. |
+
+## Current work
+
+The active spec is in `specs/` on the current branch. `beacon bullet list` names it, and its `plan.md` gives the design.
+
+## Known problems
+
+| Problem | Fix |
+|---|---|
+| Ruff reports N999 for `__init__.py`. | The directory of the checkout has a hyphen in its name. Use a name with no hyphen, for example for a git worktree. |
+| The `rauthy` tier fails at once. | Start Docker. The tier fails on purpose without Docker, so a missing tier is never a silent pass. |
+| rauthy ignores a change to the bootstrap files. | rauthy reads them only at its first start. Each test run starts a new container. |
+| After a release, `CHANGELOG.md` still has entries under "Unreleased". | Move them out in the next pull request. python-semantic-release writes each version under `<!-- version list -->` and does not empty "Unreleased". |
