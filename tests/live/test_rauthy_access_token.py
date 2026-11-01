@@ -96,3 +96,27 @@ async def test_rauthy_refuses_a_resource_that_is_not_allowed(rauthy: Rauthy) -> 
 
     assert status == 400
     assert body.get("error") == "invalid_target"
+
+
+def test_rauthy_refuses_http_basic_on_client_credentials(rauthy: Rauthy) -> None:
+    """rauthy 0.37.2 wants the secret in the form, not in HTTP Basic."""
+    import urllib.error
+    import urllib.parse
+    import urllib.request
+
+    from tests.live.conftest import PROGRAM_CLIENT_ID, PROGRAM_CLIENT_SECRET
+
+    basic = base64.b64encode(
+        f"{PROGRAM_CLIENT_ID}:{PROGRAM_CLIENT_SECRET}".encode()
+    ).decode()
+    request = urllib.request.Request(
+        f"{rauthy.issuer}oidc/token",
+        data=urllib.parse.urlencode(
+            {"grant_type": "client_credentials", "resource": rauthy.audience}
+        ).encode(),
+        headers={"Authorization": f"Basic {basic}"},
+    )
+    with pytest.raises(urllib.error.HTTPError) as refused:
+        urllib.request.urlopen(request, timeout=30)
+
+    assert 400 <= refused.value.code < 500
