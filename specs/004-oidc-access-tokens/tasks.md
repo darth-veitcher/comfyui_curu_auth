@@ -33,7 +33,7 @@ description: "Task list for 004-oidc-access-tokens"
 ## Phase 4: User Story 2 - The settings (P1)
 
 - [x] T006-T [US2] Write failing tests for the settings and the start errors in `tests/test_oidc_access_tokens.py`.
-- [ ] T006-I [US2] Read the settings in `oidc.py` and `__init__.py`, and pass them in `docker-compose.yml`.
+- [x] T006-I [US2] Read the settings in `oidc.py` and `__init__.py`, and pass them in `docker-compose.yml`.
 
 ## Phase 5: The live tier
 

@@ -13,6 +13,7 @@ comfyui_curu_auth is a ComfyUI custom node that puts a credential in front of yo
 | Call ComfyUI from a program | `Authorization: Bearer <credential>` | [Call ComfyUI from a program](#call-comfyui-from-a-program) |
 | Log in from a browser | Open `/curu-auth/login` | [Log in from a browser](#log-in-from-a-browser) |
 | Keep the same credential | `COMFYUI_CURU_AUTH_TOKEN` | [Keep the same credential after a restart](#keep-the-same-credential-after-a-restart) |
+| Let a program send an access token | `COMFYUI_CURU_AUTH_OIDC_AUDIENCE` | [Let a program call ComfyUI with an access token](#let-a-program-call-comfyui-with-an-access-token) |
 | Log in with your identity provider | The four connection settings and an allowlist | [Log in through your identity provider](#log-in-through-your-identity-provider) |
 | Choose HTTPS or plain HTTP | `X-Forwarded-Proto: https` at your proxy | [Use HTTPS or plain HTTP](#use-https-or-plain-http) |
 | Understand a 429 | Wait for `Retry-After` | [Recover from repeated failures](#recover-from-repeated-failures) |
@@ -128,6 +129,41 @@ The callback refuses a login when one of these is true:
 
 A refused callback gives HTTP 401 and counts as a failed attempt.
 
+## Let a program call ComfyUI with an access token
+
+A program can send a short-lived access token of your identity provider in place of the credential. For example, comfy-mcp gets such a token with the `client_credentials` grant. The credential keeps working.
+
+1. Register a confidential client for the program at the identity provider, with the `client_credentials` grant.
+2. Choose the audience: the value that the `aud` claim of each token must hold.
+3. Set the issuer and the audience, and restart ComfyUI:
+
+   ```bash
+   export COMFYUI_CURU_AUTH_OIDC_ISSUER_URL="https://idp.example.com/auth/v1/"
+   export COMFYUI_CURU_AUTH_OIDC_AUDIENCE="https://comfyui.example.com"
+   ```
+
+4. Check the console for `OIDC access tokens accepted on the Bearer path`.
+
+| Setting | Meaning | Default |
+|---|---|---|
+| `COMFYUI_CURU_AUTH_OIDC_ISSUER_URL` | The issuer, the same setting as for the browser login. | none |
+| `COMFYUI_CURU_AUTH_OIDC_AUDIENCE` | The value that `aud` must hold. It turns the access tokens on. | none |
+| `COMFYUI_CURU_AUTH_OIDC_REQUIRED_SCOPES` | Scopes that each token must hold, with a comma or a space between them. | empty |
+
+The access tokens need only the issuer and the audience, not the client settings or the allowlist of the browser login. An audience with no issuer, or required scopes with no audience, is a setup error. The console shows `OIDC access tokens are off:`, and the credential gate stays on.
+
+The gate accepts a token only when each of these is true:
+
+- The token is a JWT, signed with RS256, RS384, RS512, PS256, ES256 or EdDSA by a key of the issuer.
+- `iss` is the issuer, and `aud` holds the audience.
+- `exp` is in the future, with no leeway. The token lives 1 hour or less, from `iat` to `exp`.
+- The `typ` is `at+jwt`. A token of the type `JWT`, or with no `typ`, also needs a client id (`azp`, `client_id` or `cid`) and a scope. This rule refuses an ID token.
+- The token holds each required scope, in `scope` or `scp`.
+
+The same check applies to the `/ws` handshake. A refused token gets HTTP 401 and counts as one failure in the wait. A valid token passes also during a wait, because nobody can guess one. So comfy-mcp, which sends a new token at once after a 401, gets through.
+
+The gate keeps the keys of the issuer in memory. It reads them again for an unknown key, at most one time in 60 seconds. [Connect an identity provider](docs/oidc-providers.md#let-programs-send-access-tokens) says which providers can give such tokens.
+
 ## Use HTTPS or plain HTTP
 
 The session cookie is `Secure` when your browser reached ComfyUI over HTTPS. The gate knows this in two cases:
@@ -147,7 +183,7 @@ To check your proxy, log in through it and read the `Set-Cookie` of the response
 
 After a wrong credential, the gate makes that caller wait before its next try. A caller is one client address. The wait doubles after each failure: 1 s, 2 s, 4 s, and up to 5 minutes. During the wait, a program gets HTTP 429 with `Retry-After`. A browser goes to the login page. A correct attempt sets the wait to zero again. The login page shows a countdown, so you do not need to reload it.
 
-The same wait applies to the login form, the Bearer header and the OIDC login. Each request to `/curu-auth/oidc/start` counts as one failure, because each one makes the gate read the discovery document. A correct callback sets the wait to zero again. A session that is already open is never blocked.
+The same wait applies to the login form, the Bearer header, access tokens and the OIDC login. Each request to `/curu-auth/oidc/start` counts as one failure, because each one makes the gate read the discovery document. A correct callback sets the wait to zero again. A session that is already open is never blocked.
 
 On the login form and the Bearer header, only a request that **offered** a credential counts as a failure. A request with no `Authorization` header, no session cookie and no form token gets HTTP 401, but it does not start a wait. So a health check that has no credential cannot lock out a real caller at the same address. Each value that is not blank counts, also a malformed one.
 
@@ -163,6 +199,7 @@ The gate writes one line for each refused request:
 comfyui_curu_auth: authentication failure from 203.0.113.7 (GET /object_info)
 comfyui_curu_auth: authentication failure from 203.0.113.7 (login form)
 comfyui_curu_auth: authentication failure from 203.0.113.7 (oidc callback: the person is not on the allowlist)
+comfyui_curu_auth: authentication failure from 203.0.113.7 (GET /queue: token refused: expired)
 ```
 
 The text after `from` is the address of the client. The text in parentheses is the path or the reason, and it never holds a credential or a token. [`contrib/`](contrib/README.md) has configurations for fail2ban and crowdsec, with the steps to install them.
@@ -193,6 +230,7 @@ Decisions:
 - [ADR-005](project-management/ADRs/ADR-005-expire-a-stale-session-cookie-rather-than-exempt-it.md): the gate expires a stale session cookie.
 - [ADR-006](project-management/ADRs/ADR-006-session-cookie-secure-follows-the-browsers-scheme.md): `Secure` follows the scheme of the browser.
 - [ADR-007](project-management/ADRs/ADR-007-oidc-issuer-algorithms-and-allowlist.md): the issuer, the algorithms and the allowlist of the OIDC login.
+- [ADR-008](project-management/ADRs/ADR-008-oidc-access-tokens-on-the-bearer-path.md): access tokens on the Bearer path, and how they count in the wait.
 
 The credential scheme comes from [curu](https://github.com/darth-veitcher/curu). The licence is MIT, see [LICENSE](LICENSE).
 
@@ -210,7 +248,7 @@ Two test tiers do not run by default:
 | Tier | Command | What it needs and checks |
 |---|---|---|
 | `system` | `uv run pytest -m system` | Docker. It starts a CPU-only ComfyUI with this node, and Authelia as the OIDC provider. It checks the routes, the `/ws` handshake, the wait and the OIDC login. |
-| `rauthy` | `uv run --group live pytest -m rauthy` | Docker and Chromium. It starts rauthy 0.37.2 and logs in through it in a browser, with an EdDSA ID token. |
+| `rauthy` | `uv run --group live pytest -m rauthy` | Docker and Chromium. It starts rauthy 0.37.2, logs in through it in a browser with an EdDSA ID token, and calls `GET /queue` with a `client_credentials` token. |
 
 To install Chromium for the `rauthy` tier, run `uv run --group live playwright install chromium`.
 
@@ -220,6 +258,7 @@ The quality gates are `uv run ruff check`, `uv run ruff format`, `uv run ty chec
 
 | Term | Meaning |
 |---|---|
+| Access token | A short-lived JWT that the identity provider gives to a program. |
 | Allowlist | The list of people who can get a session through the OIDC login. |
 | Audience (`aud`) | The client that an ID token is for. It must hold the client id. |
 | `azp` | The authorized party: the client that the identity provider gave the ID token to. |

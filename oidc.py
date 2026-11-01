@@ -620,6 +620,45 @@ class ResourceServerConfig:
     required_scopes: tuple[str, ...] = ()
 
 
+def resolve_resource_server_config(
+    *,
+    issuer_url: str | None,
+    audience: str | None,
+    required_scopes: str | None,
+) -> ResourceServerConfig | None:
+    """``ResourceServerConfig`` when the issuer and the audience are both set;
+    ``None`` when the audience and the required scopes are both absent.
+
+    Each other mix is a partial setup, and raises :class:`OIDCConfigError`
+    (ADR-008): an audience with no issuer, required scopes with no audience,
+    or an issuer that uses ``http`` off loopback. ``__init__.py`` logs the
+    error and keeps the mode off, and the gate stays on. An issuer alone is
+    not partial: the OIDC login can use it with no mode.
+    """
+
+    scopes = tuple(dict.fromkeys(_split(required_scopes)))
+    if not audience:
+        if scopes:
+            raise OIDCConfigError(
+                "OIDC access tokens are off: COMFYUI_CURU_AUTH_OIDC_REQUIRED_SCOPES "
+                "needs COMFYUI_CURU_AUTH_OIDC_AUDIENCE"
+            )
+        return None
+    if not issuer_url:
+        raise OIDCConfigError(
+            "OIDC access tokens are off: COMFYUI_CURU_AUTH_OIDC_AUDIENCE needs "
+            "COMFYUI_CURU_AUTH_OIDC_ISSUER_URL"
+        )
+    if not is_safe_url(issuer_url):
+        raise OIDCConfigError(
+            "OIDC access tokens are off: COMFYUI_CURU_AUTH_OIDC_ISSUER_URL must "
+            "use https (plain http is allowed only on localhost, 127.0.0.1 and ::1)"
+        )
+    return ResourceServerConfig(
+        issuer_url=issuer_url, audience=audience, required_scopes=scopes
+    )
+
+
 class IssuerKeys:
     """The discovery document and the JWKS of one issuer, kept in memory.
 
@@ -1092,6 +1131,7 @@ __all__ = [
     "is_safe_url",
     "read_token_header",
     "resolve_oidc_config",
+    "resolve_resource_server_config",
     "select_signing_key",
     "verify_access_token",
     "verify_id_token",
