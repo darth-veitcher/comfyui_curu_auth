@@ -35,7 +35,7 @@ import time
 import warnings
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, NoReturn
-from urllib.parse import urlencode
+from urllib.parse import urlencode, urlsplit
 
 import aiohttp
 from aiohttp import web
@@ -190,7 +190,39 @@ async def fetch_discovery_document(
             f"{document.get('issuer')!r}, not the configured issuer "
             f"{issuer_url!r}; set the issuer to the exact value of the document"
         )
+    for endpoint in _DISCOVERY_ENDPOINTS:
+        _require_safe_url(document, endpoint)
     return document
+
+
+#: The endpoints of a discovery document that the gate uses (ADR-007).
+_DISCOVERY_ENDPOINTS = ("authorization_endpoint", "token_endpoint", "jwks_uri")
+
+#: The hosts where plain ``http`` is allowed: a provider on this computer.
+_LOOPBACK_HOSTS = frozenset({"localhost", "127.0.0.1", "::1"})
+
+
+def _require_safe_url(document: dict[str, Any], endpoint: str) -> None:
+    """Refuse an endpoint that is absent, or plain ``http`` off loopback.
+
+    A person's browser goes to ``authorization_endpoint``, the client secret
+    goes to ``token_endpoint``, and the keys come from ``jwks_uri``. Over
+    plain ``http`` to another computer, each one is open to a change on the
+    network (ADR-007; curu-memory does the same in ``_safe_url``).
+    """
+
+    url = document.get(endpoint)
+    if not isinstance(url, str) or not url:
+        raise OIDCDiscoveryError(f"the discovery document has no {endpoint}")
+    parts = urlsplit(url)
+    if parts.scheme == "https" and parts.hostname:
+        return
+    if parts.scheme == "http" and parts.hostname in _LOOPBACK_HOSTS:
+        return
+    raise OIDCDiscoveryError(
+        f"the {endpoint} of the discovery document must use https "
+        "(plain http is allowed only on localhost, 127.0.0.1 and ::1)"
+    )
 
 
 @dataclass(frozen=True)
@@ -310,6 +342,10 @@ class OIDCTokenVerificationError(Exception):
 #: sets the algorithm (:func:`select_signing_key`), never the token header.
 ALLOWED_ALGORITHMS = frozenset({"RS256", "RS384", "RS512", "PS256", "ES256", "EdDSA"})
 
+#: The clock difference, in seconds, allowed for ``exp``, ``iat`` and ``nbf``
+#: of an ID token (ADR-007).
+CLOCK_LEEWAY_SECONDS = 60
+
 #: The algorithm of a JWK that has no ``alg``, by its key type and curve.
 _DEFAULT_ALGORITHMS = {
     ("RSA", None): "RS256",
@@ -336,6 +372,29 @@ def read_token_header(token: str) -> dict[str, Any]:
     if not isinstance(header, dict):
         raise OIDCTokenVerificationError("malformed token")
     return header
+
+
+def check_token_algorithm(header: dict[str, Any]) -> str:
+    """The ``alg`` of ``header``, if the gate can accept it at all.
+
+    Runs before the gate reads the JWKS, so a token with ``none`` or an
+    HMAC algorithm never causes a fetch (ADR-007). An HMAC check uses a
+    shared secret, and a gate that accepted one could be tricked into using
+    the public key of the provider as that secret (key confusion).
+    """
+
+    alg = header.get("alg")
+    if not isinstance(alg, str):
+        raise OIDCTokenVerificationError("malformed token")
+    if alg.upper().startswith("HS"):
+        raise OIDCTokenVerificationError(
+            f"algorithm {alg} is not allowed: the token is signed with a shared "
+            "secret. An Authentik provider with no signing key does this; select "
+            "a signing key on the provider"
+        )
+    if alg not in ALLOWED_ALGORITHMS:
+        raise OIDCTokenVerificationError(f"algorithm {alg!r} is not allowed")
+    return alg
 
 
 def _key_algorithm(key: Any) -> str | None:
@@ -412,6 +471,7 @@ async def verify_id_token(
     from joserfc import jwt
 
     header = read_token_header(id_token)
+    check_token_algorithm(header)
     key_set = await _fetch_jwks(discovery["jwks_uri"], timeout=timeout)
     key, algorithm = select_signing_key(header, key_set)
 
@@ -422,15 +482,27 @@ async def verify_id_token(
             warnings.simplefilter("ignore", jose_errors.SecurityWarning)
             token = jwt.decode(id_token, key, algorithms=[algorithm])
         claims_registry = jwt.JWTClaimsRegistry(
+            leeway=CLOCK_LEEWAY_SECONDS,
             iss={"essential": True, "value": config.issuer_url},
             aud={"essential": True, "value": config.client_id},
             nonce={"essential": True, "value": expected_nonce},
+            exp={"essential": True},
+            iat={"essential": True},
         )
         claims_registry.validate(token.claims)
     except jose_errors.JoseError as exc:
         raise OIDCTokenVerificationError(
             f"ID token verification failed: {exc}"
         ) from exc
+
+    # OpenID Connect Core 1.0, section 3.1.3.7: with more than one audience,
+    # azp names the client the token was issued to. When azp is present at
+    # all, it must be this client.
+    audience = token.claims.get("aud")
+    azp = token.claims.get("azp")
+    several = isinstance(audience, list) and len(audience) > 1
+    if (several or azp is not None) and azp != config.client_id:
+        raise OIDCTokenVerificationError("the azp of the ID token is not this client")
 
     return token.claims
 
@@ -626,6 +698,7 @@ def build_oidc_routes(
 
 __all__ = [
     "ALLOWED_ALGORITHMS",
+    "CLOCK_LEEWAY_SECONDS",
     "OIDC_CALLBACK_PATH",
     "OIDC_START_PATH",
     "AuthorizationRequestStore",
@@ -635,6 +708,7 @@ __all__ = [
     "OIDCTokenVerificationError",
     "build_authorization_url",
     "build_oidc_routes",
+    "check_token_algorithm",
     "discovery_url",
     "fetch_discovery_document",
     "read_token_header",
