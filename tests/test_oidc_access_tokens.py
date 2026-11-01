@@ -102,8 +102,10 @@ class TestTheGateRefusesABadToken:
         with pytest.raises(OIDCTokenVerificationError) as refused:
             await _check(issuer, token, required_scopes=required_scopes)
         reason = refused.value.reason
+        # No segment of a real token is in the reason. (Short test values such
+        # as "a.b" are letters that any text holds, so they are not checked.)
         for part in token.split("."):
-            if part:
+            if len(part) >= 8:
                 assert part not in reason
         return reason
 

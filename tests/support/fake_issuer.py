@@ -42,6 +42,25 @@ def _segment(value: dict[str, Any]) -> str:
     return _b64(json.dumps(value, separators=(",", ":")).encode())
 
 
+#: The keys made in this test run, by (kid, alg). A 2048-bit RSA key takes up
+#: to a second to make, and each test starts a new issuer; a test that needs a
+#: key that no other issuer has uses a new ``kid``.
+_KEYS: dict[tuple[str, str], Any] = {}
+
+
+def _private_key(kid: str, alg: str) -> Any:
+    if (kid, alg) not in _KEYS:
+        parameters: KeyParameters = {"kid": kid}
+        if alg.startswith(("RS", "PS")):
+            key: Any = RSAKey.generate_key(2048, parameters=parameters, private=True)
+        elif alg == "ES256":
+            key = ECKey.generate_key("P-256", parameters=parameters, private=True)
+        else:
+            key = OKPKey.generate_key("Ed25519", parameters=parameters, private=True)
+        _KEYS[(kid, alg)] = key
+    return _KEYS[(kid, alg)]
+
+
 class FakeIssuer:
     """Start it with ``async with FakeIssuer() as issuer:``.
 
@@ -80,14 +99,7 @@ class FakeIssuer:
         self._server: TestServer | None = None
 
     def add_key(self, kid: str, alg: str) -> None:
-        parameters: KeyParameters = {"kid": kid}
-        if alg.startswith(("RS", "PS")):
-            key: Any = RSAKey.generate_key(2048, parameters=parameters, private=True)
-        elif alg == "ES256":
-            key = ECKey.generate_key("P-256", parameters=parameters, private=True)
-        else:
-            key = OKPKey.generate_key("Ed25519", parameters=parameters, private=True)
-        self.keys[kid] = (alg, key)
+        self.keys[kid] = (alg, _private_key(kid, alg))
 
     async def __aenter__(self) -> FakeIssuer:
         self._server = TestServer(self._app(), host="127.0.0.1")
