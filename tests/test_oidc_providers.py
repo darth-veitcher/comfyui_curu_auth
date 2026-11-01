@@ -350,7 +350,8 @@ class TestTheClaimsOfAnIdToken:
         from oidc import OIDCTokenVerificationError
 
         async with FakeIssuer() as issuer:
-            token = issuer.id_token(**{claim: None})
+            missing: dict[str, Any] = {claim: None}
+            token = issuer.id_token(**missing)
             with pytest.raises(OIDCTokenVerificationError):
                 await _verify(issuer, token)
 
