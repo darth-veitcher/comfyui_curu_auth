@@ -22,14 +22,16 @@ A release is automatic. Each merge to `main` runs python-semantic-release in `.g
 
 ## Rules
 
-- Write a failing test first, and commit it alone. Then write the code, and commit it alone ([constitution](.specify/memory/constitution.md), article IV).
-- Use Conventional Commits. The `commit-msg` hook checks them. Never use `--no-verify`.
-- Cut each branch from `main`, and open each pull request to `main`. There is no `develop` branch.
+The articles are in [the constitution](.specify/memory/constitution.md).
+
+- Write a failing test first, and commit it alone. Then write the code, and commit it alone (article IV).
+- Use Conventional Commits. The `commit-msg` hook checks them. Never use `--no-verify` (Development Workflow).
+- Cut each branch from `main`, and open each pull request to `main`. There is no `develop` branch (project rule).
 - Never weaken the static credential path for an optional login method (article I).
 - An error in an optional setting must keep the gate on. Never raise from `__init__.py`, because ComfyUI then skips the node (article III).
-- Never log a credential, a token, or a part of a token.
-- A change to the log line `authentication failure from <IP>` breaks fail2ban and crowdsec. Say so in the pull request.
-- A change that a user can see also changes `README.md` or `docs/` in the same pull request.
+- Never log a credential, a token, or a part of a token (Security Requirements).
+- A change to the log line `authentication failure from <IP>` breaks fail2ban and crowdsec. Say so in the pull request (Security Requirements).
+- A change that a user can see also changes `README.md` or `docs/` in the same pull request (project rule).
 
 ## Where things are
 
@@ -39,7 +41,7 @@ A release is automatic. Each merge to `main` runs python-semantic-release in `.g
 | `oidc.py` | The OIDC login: discovery, keys, ID-token rules, the allowlist and the routes. |
 | `__init__.py` | The wiring that ComfyUI imports. It reads the environment. |
 | `tests/` | The default tests. `tests/support/fake_issuer.py` is the fake OIDC provider. |
-| `tests/system/` | The `system` tier, with `docker-compose.yml` and `docker/`. |
+| `tests/system/` | The `system` tier. It uses `docker-compose.yml` and `docker/` in the root of the repository. |
 | `tests/live/` | The `rauthy` tier. |
 | `contrib/` | The fail2ban and crowdsec configurations. |
 | `docs/` | The guides for people. |
@@ -48,7 +50,7 @@ A release is automatic. Each merge to `main` runs python-semantic-release in `.g
 
 ## Current work
 
-The active spec is in `specs/` on the current branch. `beacon bullet list` names it, and its `plan.md` gives the design.
+Active spec: [specs/003-oidc-provider-fixes/spec.md](specs/003-oidc-provider-fixes/spec.md) and its [plan.md](specs/003-oidc-provider-fixes/plan.md). `beacon bullet status` names the bullet of the current branch.
 
 ## Known problems
 

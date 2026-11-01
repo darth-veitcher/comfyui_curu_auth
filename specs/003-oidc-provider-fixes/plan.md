@@ -36,7 +36,7 @@ Fix the issuer rule, the algorithm rule and the claim rules of the OIDC login in
 
 | Principle | Assessment |
 |---|---|
-| I. Minimal Attack Surface | PASS. No new runtime dependency. Playwright is in a dev group for the live tier only. |
+| I. Minimal Attack Surface | PASS. No new runtime dependency. Playwright is in the `live` dependency group, for the `rauthy` tier only. |
 | II. Total Route Coverage | PASS. No new route. The OIDC routes stay in the public paths only when the login is on. |
 | III. Zero-Config by Default | PASS. A setup with no allowlist keeps the credential gate on, and only the OIDC login stays off. |
 | IV. Test-First for Security-Critical Logic | PASS. Each rule has a failing test in its own commit before the code. |

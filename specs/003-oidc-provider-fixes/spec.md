@@ -6,7 +6,7 @@
 
 **Status**: Draft
 
-**Input**: Issue #13, items 1 to 5 and item 7. Item 6 is spec 004 (issue #14).
+**Input**: Issue #13, items 1 to 5 (the issuer, the algorithms, the allowlist, the discovery checks and the claims) and item 7 (the scopes). Item 6 (access tokens on the Bearer path) is spec 004, issue #14.
 
 **Epic**: [oidc-auth](../../project-management/Roadmap/epics/oidc-auth.md)
 
@@ -30,7 +30,7 @@ An OIDC provider is the identity provider (IdP) that logs the person in. The iss
 
 ### User Story 1 - Log in through rauthy or Authentik (Priority: P1)
 
-An operator sets the issuer exactly as the discovery document of the provider gives it, with or without a `/` at the end. The login then works.
+An operator copies the issuer exactly from the discovery document of the provider. The login then works, whether that issuer ends in `/` or not.
 
 **Why this priority**: Without this story, the login fails against rauthy and Authentik. The other stories have no value until the login works.
 
@@ -57,11 +57,13 @@ An operator lists the people who can log in. A person who is not on the list get
 **Acceptance Scenarios**:
 
 1. **Given** an allowlist of subjects, **When** a person with a listed `sub` logs in, **Then** the gate gives a session.
-2. **Given** an allowlist of subjects, **When** a person with another `sub` logs in, **Then** the gate gives HTTP 401 and writes the failure log line.
-3. **Given** an allowlist of emails, **When** the ID token has a listed email but `email_verified` is not true, **Then** the gate refuses the login.
-4. **Given** an allowed domain, **When** the `hd` claim of the ID token is that domain, **Then** the gate gives a session.
-5. **Given** a full OIDC setup with no allowlist, **When** ComfyUI starts, **Then** no OIDC route exists and the credential gate stays on.
-6. **Given** `ALLOW_ANY_USER=true`, **When** any person logs in at the provider, **Then** the gate gives a session.
+2. **Given** an allowlist of subjects, **When** a person with another `sub` logs in, **Then** the gate gives HTTP 401.
+3. **Given** an allowlist of subjects, **When** a person with another `sub` logs in, **Then** the gate writes the failure log line.
+4. **Given** an allowlist of emails, **When** the ID token has a listed email but `email_verified` is not true, **Then** the gate refuses the login.
+5. **Given** an allowed domain, **When** the `hd` claim of the ID token is that domain, **Then** the gate gives a session.
+6. **Given** a full OIDC setup with no allowlist, **When** ComfyUI starts, **Then** no OIDC route exists.
+7. **Given** a full OIDC setup with no allowlist, **When** ComfyUI starts, **Then** the credential gate stays on.
+8. **Given** `ALLOW_ANY_USER=true`, **When** any person logs in at the provider, **Then** the gate gives a session.
 
 ---
 
@@ -116,7 +118,8 @@ An operator sets the scopes that the gate asks for. Some providers refuse a scop
 - **FR-002**: The gate MUST keep the configured issuer exactly as the operator writes it.
 - **FR-003**: The gate MUST refuse a discovery document whose `issuer` is not exactly the configured issuer.
 - **FR-004**: The gate MUST refuse an ID token whose `iss` is not exactly the configured issuer.
-- **FR-005**: The gate MUST accept only RS256, RS384, RS512, PS256, ES256 and EdDSA, and MUST take the algorithm from the matching JWK.
+- **FR-005**: The gate MUST accept only RS256, RS384, RS512, PS256, ES256 and EdDSA.
+- **FR-005a**: The gate MUST take the algorithm from the JWK that matches the `kid` of the token.
 - **FR-006**: The gate MUST refuse `none` and each HMAC algorithm before it reads the JWKS.
 - **FR-007**: The reason for an HS256 refusal MUST say that the Authentik provider has no signing key.
 - **FR-008**: The gate MUST refuse a discovery document whose `authorization_endpoint`, `token_endpoint` or `jwks_uri` uses `http` on a host that is not loopback.
@@ -127,8 +130,12 @@ An operator sets the scopes that the gate asks for. Some providers refuse a scop
 - **FR-013**: An email in the allowlist MUST match only when the ID token has `email_verified` true.
 - **FR-014**: The OIDC login MUST stay off, with an error at start, when no allowlist is set and `ALLOW_ANY_USER` is not true.
 - **FR-015**: A refused person MUST get the same failure log line and the same rate limit as each other failed login.
-- **FR-016**: The gate MUST ask for the configured scopes, and MUST always include `openid`.
+- **FR-016**: The gate MUST ask for the configured scopes.
+- **FR-016a**: The scopes MUST always include `openid`.
 - **FR-017**: The changes MUST NOT change the static credential path.
+- **FR-018**: The gate MUST refuse an issuer that uses `http` on a host that is not loopback (review finding).
+- **FR-019**: The gate MUST NOT follow a redirect from the discovery URL, the JWKS URL or the token endpoint (review finding).
+- **FR-020**: A malformed JWKS MUST give a refused login with the failure log line (review finding).
 
 ### Key Entities
 

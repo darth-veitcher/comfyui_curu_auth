@@ -30,10 +30,15 @@ Feature: The OIDC login works with rauthy, Authentik and other providers
     When a person with a listed sub logs in
     Then the gate gives a session
 
-  Scenario: A subject that is not listed
+  Scenario: A subject that is not listed gets 401
     Given an allowlist of subjects
     When a person with another sub logs in
-    Then the gate gives HTTP 401 and writes the failure log line
+    Then the gate gives HTTP 401
+
+  Scenario: A subject that is not listed is logged
+    Given an allowlist of subjects
+    When a person with another sub logs in
+    Then the gate writes the failure log line
 
   Scenario: An email that is not verified
     Given an allowlist of emails
@@ -45,10 +50,15 @@ Feature: The OIDC login works with rauthy, Authentik and other providers
     When the hd claim of the ID token is that domain
     Then the gate gives a session
 
-  Scenario: No allowlist
-    Given a full OIDC setup with no allowlist and no ALLOW_ANY_USER
+  Scenario: No allowlist, no OIDC route
+    Given a full OIDC setup with no allowlist
     When ComfyUI starts
-    Then the OIDC routes do not exist and the credential gate stays on
+    Then no OIDC route exists
+
+  Scenario: No allowlist, the gate stays on
+    Given a full OIDC setup with no allowlist
+    When ComfyUI starts
+    Then the credential gate stays on
 
   Scenario: Any user
     Given ALLOW_ANY_USER=true

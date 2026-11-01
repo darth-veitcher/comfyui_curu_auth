@@ -20,7 +20,7 @@
 > One paragraph: what problem class are we addressing this year? What does
 > "winning" look like at year-end?
 
-By year-end, this is the default answer to "how do I put a password on ComfyUI" for self-hosted and rented-GPU users — zero-config bearer-token install, every route covered including websockets, fail2ban/crowdsec ready for public-IP deployments. From there, we expand *who* gets to authenticate: OIDC/OAuth for teams with an existing identity provider, and passkeys/WebAuthn for a passwordless, phishing-resistant flow — added as options alongside the credential model, not replacing its zero-config simplicity for solo/home users.
+By year-end, this is the default way to put a password on ComfyUI for self-hosted and rented-GPU users. It installs with no configuration, covers each route with the websocket, and works with fail2ban and crowdsec. Next, more people can log in: OIDC for teams with an identity provider, and passkeys for a passwordless login. Both are options next to the credential, which stays simple for one person at home.
 
 ---
 
@@ -30,9 +30,9 @@ The two-to-five concrete initiatives you've committed to delivering this quarter
 Each is materialised as an epic file under [`epics/`](./epics/) with its own
 success criteria, owned specs, and ADRs.
 
-- **OIDC with real providers** — `epics/oidc-auth.md` — the OIDC login works with rauthy, Authentik and other providers (spec 003), and programs can send OIDC access tokens (spec 004).
+- **OIDC with real providers** — `epics/oidc-auth.md` — the OIDC login works with rauthy and Authentik (spec 003). Programs can send OIDC access tokens (spec 004).
 - **Passkeys** — `epics/passkey-auth.md` — a passwordless login. Not started.
-- **Browser end-to-end tests** — `epics/browser-e2e.md` — not started. The rauthy tier of spec 003 adds the first Playwright test.
+- **Browser end-to-end tests** — `epics/browser-e2e.md` — started: the rauthy tier of spec 003 adds the first Playwright test.
 
 For the live rollup (specs per epic, % tasks complete, last-commit age):
 

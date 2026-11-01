@@ -33,7 +33,9 @@ The gate keeps the exact issuer, takes an asymmetric algorithm from the key, and
 
 - The discovery URL is `issuer.rstrip("/") + "/.well-known/openid-configuration"`.
 - The `issuer` of the discovery document must equal the configured issuer exactly. The `iss` of each ID token must equal the same value.
-- `authorization_endpoint`, `token_endpoint` and `jwks_uri` must use `https`. Plain `http` is allowed only on `localhost`, `127.0.0.1` and `::1`.
+- The issuer, `authorization_endpoint`, `token_endpoint` and `jwks_uri` must use `https`. Plain `http` is allowed only on `localhost`, `127.0.0.1` and `::1`.
+- The gate follows no redirect from these URLs. A redirect could move the keys to `http`, or send the client secret to another host.
+- A bad discovery document stops the login at its start with HTTP 503. The gate logs the reason at ERROR, but not as an authentication failure.
 
 **The algorithms.**
 
@@ -68,8 +70,8 @@ The gate keeps the exact issuer, takes an asymmetric algorithm from the key, and
 | `COMFYUI_CURU_AUTH_OIDC_CLIENT_ID` | The client id. From spec 002. | none |
 | `COMFYUI_CURU_AUTH_OIDC_CLIENT_SECRET` | The client secret. From spec 002. | none |
 | `COMFYUI_CURU_AUTH_OIDC_REDIRECT_URI` | The callback URL. From spec 002. | none |
-| `COMFYUI_CURU_AUTH_OIDC_ALLOWED_SUBJECTS` | The `sub` values that can log in, with a comma between them. | empty |
-| `COMFYUI_CURU_AUTH_OIDC_ALLOWED_EMAILS` | The verified emails that can log in, with a comma between them. | empty |
+| `COMFYUI_CURU_AUTH_OIDC_ALLOWED_SUBJECTS` | The `sub` values that can log in, with a comma or a space between them. | empty |
+| `COMFYUI_CURU_AUTH_OIDC_ALLOWED_EMAILS` | The verified emails that can log in, with a comma or a space between them. | empty |
 | `COMFYUI_CURU_AUTH_OIDC_ALLOWED_DOMAIN` | One Google Workspace domain, compared with the `hd` claim. | empty |
 | `COMFYUI_CURU_AUTH_OIDC_ALLOW_ANY_USER` | `true` lets the provider decide who can log in. | `false` |
 | `COMFYUI_CURU_AUTH_OIDC_SCOPES` | The scopes of the login, with a space or a comma between them. The gate always adds `openid`. | `openid profile email` |
@@ -88,7 +90,7 @@ The reasons are these:
 - **Good:** a refused person is visible to fail2ban and crowdsec with the log format they already read.
 - **Cost:** this is a breaking change. An operator who used the login of spec 002 must set an allowlist or `ALLOW_ANY_USER=true` after the upgrade.
 - **Cost:** a Google ID token with `iss` `accounts.google.com`, with no scheme, is refused. Google uses the `https` form in the authorization code flow.
-- **Cost:** an operator must copy the issuer exactly. A wrong `/` gives a refused discovery document, with an error that names both values.
+- **Cost:** an operator must copy the issuer exactly. A wrong `/` gives HTTP 503 at the start of the login, and the log names both values.
 - **Escape route:** the allowlist is one function of the claims. A later rule, for example a group claim, adds one branch.
 
 ## Considered Alternatives

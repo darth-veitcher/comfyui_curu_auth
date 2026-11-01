@@ -17,14 +17,14 @@ description: "Task list for 003-oidc-provider-fixes"
 
 ## Phase 1: Setup
 
-- [x] T001 Upgrade BEACON and Spec Kit, and commit the result (issue #15).
+- [x] T001 Upgrade BEACON and Spec Kit in `.claude/` and `.specify/` (issue #15).
 - [x] T002 Make the release re-lock `uv.lock` in `pyproject.toml` (issue #16).
 - [x] T003 Write the settings names and the rules in `project-management/ADRs/ADR-007-oidc-issuer-algorithms-and-allowlist.md`.
 - [x] T004 Add the fake issuer in `tests/support/fake_issuer.py`, with RSA, EC and Ed25519 keys.
 
 ## Phase 2: User Story 1 - Log in through rauthy or Authentik (P1)
 
-- [x] T005-T [US1] Write failing tests in `tests/test_oidc_providers.py` for the issuer with `/`, the exact issuer of the document, and an EdDSA and ES256 ID token.
+- [x] T005-T [US1] Write failing tests in `tests/test_oidc_providers.py` for the issuer rule and for EdDSA and ES256 ID tokens.
 - [x] T005-I [US1] Fix the discovery URL, the issuer check and the key choice in `oidc.py`.
 
 ## Phase 3: User Story 3 - The gate refuses an unsafe provider or token (P2)
@@ -54,8 +54,10 @@ description: "Task list for 003-oidc-provider-fixes"
 - [x] T013 Write the guide for each provider in `docs/oidc-providers.md`, with "tested live" or "from the provider documentation" on each line.
 - [x] T014 Rewrite `README.md` to the headings of `docs/WRITING.md`, and add `AGENTS.md` (issue #17).
 - [x] T015 Add the change to `CHANGELOG.md`, and add the spec to `project-management/Roadmap/README.md` (issue #15).
-- [ ] T016 Run the quality gates, `uv run pytest` 3 times, the `rauthy` tier, and `beacon doctor --strict`.
-- [ ] T017 Get a review from `beacon-reviewer` in a new context, and fix each finding.
+- [x] T016 Run the quality gates, `uv run pytest` 3 times, the `rauthy` tier, and `beacon doctor --strict`.
+- [x] T017 Get a review from `beacon-reviewer` in a new context, and fix each finding.
+- [x] T018 Add failing tests and fixes for the review findings in `tests/test_oidc_providers.py` and `oidc.py`.
+- [x] T019 Add a test of the README examples in `tests/test_readme.py`.
 
 ## Dependencies
 
