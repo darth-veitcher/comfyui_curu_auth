@@ -24,12 +24,12 @@ A release is automatic. Each merge to `main` runs python-semantic-release in `.g
 
 The articles are in [the constitution](.specify/memory/constitution.md).
 
-- Write a failing test first, and commit it alone. Then write the code, and commit it alone (article IV).
-- Use Conventional Commits. The `commit-msg` hook checks them. Never use `--no-verify` (Development Workflow).
+- Write a failing test before the code (article IV). Commit the test alone, and then the code alone (project rule).
+- Use Conventional Commits. The `commit-msg` hook checks them. Never use `--no-verify` (project rule).
 - Cut each branch from `main`, and open each pull request to `main`. There is no `develop` branch (project rule).
 - Never weaken the static credential path for an optional login method (article I).
 - An error in an optional setting must keep the gate on. Never raise from `__init__.py`, because ComfyUI then skips the node (article III).
-- Never log a credential, a token, or a part of a token (Security Requirements).
+- Never log a credential (Security Requirements). Never log a token or a part of a token (project rule).
 - A change to the log line `authentication failure from <IP>` breaks fail2ban and crowdsec. Say so in the pull request (Security Requirements).
 - A change that a user can see also changes `README.md` or `docs/` in the same pull request (project rule).
 

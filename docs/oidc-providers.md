@@ -14,7 +14,7 @@ The gate is a confidential client. It uses the authorization code flow: the brow
 | Need | How to check it |
 |---|---|
 | A discovery document at `<issuer>/.well-known/openid-configuration` | Open the URL. Its `issuer` must equal your issuer setting, character for character, with the same `/` at the end. |
-| `https` for the issuer and each endpoint | The issuer, `authorization_endpoint`, `token_endpoint` and `jwks_uri` must use `https`. Plain `http` is allowed only on `localhost`, `127.0.0.1` and `::1`. The gate follows no redirect. |
+| `https` for the issuer and each endpoint | The issuer, `authorization_endpoint`, `token_endpoint` and `jwks_uri` must use `https`. The gate allows plain `http` only on `localhost`, `127.0.0.1` and `::1`. The gate follows no redirect. |
 | An asymmetric signing key | The ID token must use RS256, RS384, RS512, PS256, ES256 or EdDSA. The gate refuses `none` and HS256, HS384 and HS512. |
 | `exp` and `iat` in the ID token | The gate refuses an ID token without them. |
 | `azp` (the authorized party) equal to the client id | This applies when the ID token has more than one audience (`aud`), or has `azp`. |
@@ -34,7 +34,7 @@ A valid login at the identity provider is not enough. The gate also needs an all
 | `COMFYUI_CURU_AUTH_OIDC_ALLOWED_DOMAIN` | Each person in one Google Workspace domain can log in. The gate compares it with the `hd` claim. |
 | `COMFYUI_CURU_AUTH_OIDC_ALLOW_ANY_USER=true` | The identity provider already limits who can log in, for example with a group binding. |
 
-Read the `sub` of a person at the identity provider. Each section below says where. The gate never writes a `sub` to its log.
+Read the `sub` of a person at the identity provider. The sections for rauthy, Authentik, Keycloak, Auth0 and Okta say where. The gate never writes a `sub` to its log.
 
 ## Use rauthy
 
@@ -133,9 +133,9 @@ The gate writes one line for each login that the callback refuses. The reason fo
 | `OIDC login is off: ... must use https` at start | Use an `https` issuer, or a loopback host. |
 | `OIDC login unavailable: ... names the issuer ...` | Copy the `issuer` value exactly from the discovery document, with its `/`. |
 | `OIDC login unavailable: ... must use https` | Make each endpoint of the identity provider `https`. |
-| `discovery document refused` | The discovery document changed during the login. Fix it as above, and try again. |
+| `discovery document refused` | At the callback, the gate could not read the discovery document, or the document failed a check. Make sure that the identity provider is available, fix the document as above, and try again. |
 | `the JWKS is not a valid key set` or `failed to fetch the JWKS` | Open `jwks_uri` of the discovery document, and check that it gives the keys with no redirect. |
 | `algorithm HS256 is not allowed ... select a signing key` | Select a signing key on the provider. This is the usual Authentik fault. |
 | `the person is not on the allowlist` | Add the `sub`, the verified email or the domain of the person. |
 | `the azp of the ID token is not this client` | Check that the client id setting is the client id of the provider. |
-| `unknown key` | The provider changed its keys during the login. Try again. |
+| `unknown key` | The identity provider changed its keys during the login: try again. Or the ID token has no `kid`, and the JWKS has more than one signing key. Then make the identity provider send `kid`. |

@@ -37,7 +37,7 @@ git clone https://github.com/darth-veitcher/comfyui_curu_auth
 2. Open ComfyUI in your browser. The gate sends you to its login page.
 3. Paste the credential, and select "Log in". ComfyUI opens.
 
-You cannot get the credential over the network. It goes only to the console. This is intentional: an exchange of credentials over the network is a new point of attack.
+You cannot get the credential over the network. It goes only to the console. The gate does this on purpose: an exchange of credentials over the network is a new point of attack.
 
 ## Call ComfyUI from a program
 
@@ -53,7 +53,7 @@ A correct credential gives the normal answer of ComfyUI. A missing or wrong cred
 
 Open `/curu-auth/login`, or any page of ComfyUI, and paste the credential. The gate then sets a session cookie, `curu_auth`, for 30 days. The cookie is `HttpOnly` and `SameSite=Strict`. It holds a separate session token, so the browser never sends the credential again.
 
-The session lives in memory. A restart of ComfyUI ends each session, and the browser shows the login page again.
+The gate keeps the sessions in memory. A restart of ComfyUI ends each session, and the browser shows the login page again.
 
 ## Keep the same credential after a restart
 
@@ -65,9 +65,9 @@ To choose the credential yourself, set `COMFYUI_CURU_AUTH_TOKEN`:
 export COMFYUI_CURU_AUTH_TOKEN="$(python3 -c 'import secrets; print(secrets.token_urlsafe(32))')"
 ```
 
-Set it where you start ComfyUI. Examples are a shell `export`, the `Environment=` of a systemd unit, and the `environment:` of a `docker-compose.yml`. The variable always wins over the file, and the gate writes its value to the file.
+Set it where you start ComfyUI. Examples are a shell `export`, the `Environment=` of a systemd unit, and the `environment:` of a `docker-compose.yml`. When you set the variable, the gate uses it and not the file. The gate also writes its value to the file.
 
-A reboot from ComfyUI-Manager keeps the old environment of the process. A variable that you set after the first start reaches the gate only through the file.
+A reboot from ComfyUI-Manager keeps the old environment of the process. So the gate does not get a variable that you set after the first start. It uses the credential in the file. To use a new variable, stop ComfyUI and start it again.
 
 ## Log in through your identity provider
 
@@ -113,12 +113,12 @@ The OIDC login stays off until you set the four connection settings. If one of t
 
 The OIDC login also stays off, with a message in the console, in two cases:
 
-- You set no allowlist. The message starts with `OIDC login is off: set`. Set an allowlist, or `ALLOW_ANY_USER=true` when the identity provider already limits who can log in.
+- You set no allowlist. The message contains `OIDC login is off: set`. Set an allowlist, or `ALLOW_ANY_USER=true` when the identity provider already limits who can log in.
 - The issuer uses plain `http` on a host that is not loopback. Use `https`.
 
 Never set `ALLOW_ANY_USER=true` for Google, because each Google account can log in there.
 
-When the discovery document names another issuer, or an endpoint uses plain `http` off loopback, the login stops at its start. The browser gets HTTP 503, and the log shows `OIDC login unavailable:` with the reason. That line does not count as an authentication failure.
+When the discovery document names another issuer, or an endpoint uses plain `http` off loopback, the login stops at its start. The browser gets HTTP 503, and the log shows `OIDC login unavailable:` with the reason. That line is not an `authentication failure` line, so fail2ban and crowdsec do not read it.
 
 The callback refuses a login when one of these is true:
 
@@ -145,11 +145,11 @@ To check your proxy, log in through it and read the `Set-Cookie` of the response
 
 <img src="docs/screenshots/rate-limited.png" width="480" alt="Rate-limited login screen with a live countdown">
 
-After a wrong credential, the gate makes that caller wait before its next try. A caller is one client address. The wait doubles after each failure: 1 s, 2 s, 4 s, and up to 5 minutes. During the wait, each request gets HTTP 429 with `Retry-After`. A correct attempt sets the wait to zero again. The login page shows a countdown, so you do not need to reload it.
+After a wrong credential, the gate makes that caller wait before its next try. A caller is one client address. The wait doubles after each failure: 1 s, 2 s, 4 s, and up to 5 minutes. During the wait, a program gets HTTP 429 with `Retry-After`. A browser goes to the login page. A correct attempt sets the wait to zero again. The login page shows a countdown, so you do not need to reload it.
 
 The same wait applies to the login form, the Bearer header and the OIDC login. Each request to `/curu-auth/oidc/start` counts as one failure, because each one makes the gate read the discovery document. A correct callback sets the wait to zero again. A session that is already open is never blocked.
 
-Only a request that **offered** a credential counts as a failure. A request with no `Authorization` header, no session cookie and no form token gets HTTP 401, but it does not start a wait. So a health check that has no credential cannot lock out a real caller at the same address. Each value that is not blank counts, also a malformed one.
+On the login form and the Bearer header, only a request that **offered** a credential counts as a failure. A request with no `Authorization` header, no session cookie and no form token gets HTTP 401, but it does not start a wait. So a health check that has no credential cannot lock out a real caller at the same address. Each value that is not blank counts, also a malformed one.
 
 A session cookie from before a restart is a wrong credential, and it counts. The gate then expires that cookie in its answer, so the browser stops sending it. Without this, an open ComfyUI tab opens `/ws` again every 300 ms, and so it renews the 5-minute wait at all times.
 
@@ -172,7 +172,7 @@ The text after `from` is the address of the client. The text in parentheses is t
 - The gate has one credential for all people. It gives no roles and no separate accounts. The OIDC allowlist decides who logs in, not what they can do.
 - The gate accepts one OIDC provider at a time.
 - The gate does not support a multi-tenant Microsoft Entra ID app. Use the issuer of one tenant.
-- Sessions live in memory. A restart of ComfyUI ends each session.
+- The gate keeps the sessions in memory. A restart of ComfyUI ends each session.
 - The address of a client comes from `X-Forwarded-For` when a proxy sends it. A client that can reach ComfyUI without the proxy can change that header, and so avoid the wait.
 
 ## Technical notes
