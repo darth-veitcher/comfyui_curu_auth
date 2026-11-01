@@ -203,6 +203,13 @@ def resolve_oidc_config(
 
     if not (issuer_url and client_id and client_secret and redirect_uri):
         return None
+    if not is_safe_url(issuer_url):
+        # The discovery document comes from the issuer and names the keys, so
+        # plain http to another host would let the network swap the keys.
+        raise OIDCConfigError(
+            "OIDC login is off: COMFYUI_CURU_AUTH_OIDC_ISSUER_URL must use https "
+            "(plain http is allowed only on localhost, 127.0.0.1 and ::1)"
+        )
     domain = (allowed_domain or "").strip().lower()
     allowlist = LoginAllowlist(
         subjects=frozenset(_split(allowed_subjects)),
@@ -278,7 +285,7 @@ async def fetch_discovery_document(
                 allow_redirects=False,
             ) as response,
         ):
-            response.raise_for_status()
+            _require_ok(response)
             document = await response.json(content_type=None)
     except (TimeoutError, aiohttp.ClientError, ValueError) as exc:
         raise OIDCDiscoveryError(
@@ -304,6 +311,15 @@ _DISCOVERY_ENDPOINTS = ("authorization_endpoint", "token_endpoint", "jwks_uri")
 _LOOPBACK_HOSTS = frozenset({"localhost", "127.0.0.1", "::1"})
 
 
+def is_safe_url(url: str) -> bool:
+    """Whether ``url`` uses ``https``, or plain ``http`` on a loopback host."""
+
+    parts = urlsplit(url)
+    if parts.scheme == "https" and parts.hostname:
+        return True
+    return parts.scheme == "http" and parts.hostname in _LOOPBACK_HOSTS
+
+
 def _require_safe_url(document: dict[str, Any], endpoint: str) -> None:
     """Refuse an endpoint that is absent, or plain ``http`` off loopback.
 
@@ -316,10 +332,7 @@ def _require_safe_url(document: dict[str, Any], endpoint: str) -> None:
     url = document.get(endpoint)
     if not isinstance(url, str) or not url:
         raise OIDCDiscoveryError(f"the discovery document has no {endpoint}")
-    parts = urlsplit(url)
-    if parts.scheme == "https" and parts.hostname:
-        return
-    if parts.scheme == "http" and parts.hostname in _LOOPBACK_HOSTS:
+    if is_safe_url(url):
         return
     raise OIDCDiscoveryError(
         f"the {endpoint} of the discovery document must use https "
@@ -443,6 +456,8 @@ class OIDCTokenVerificationError(Exception):
 #: sets the algorithm (:func:`select_signing_key`), never the token header.
 ALLOWED_ALGORITHMS = frozenset({"RS256", "RS384", "RS512", "PS256", "ES256", "EdDSA"})
 
+_HMAC_ALGORITHMS = frozenset({"HS256", "HS384", "HS512"})
+
 #: The clock difference, in seconds, allowed for ``exp``, ``iat`` and ``nbf``
 #: of an ID token (ADR-007).
 CLOCK_LEEWAY_SECONDS = 60
@@ -487,14 +502,17 @@ def check_token_algorithm(header: dict[str, Any]) -> str:
     alg = header.get("alg")
     if not isinstance(alg, str):
         raise OIDCTokenVerificationError("malformed token")
+    # The reason names the algorithm only when it is one of the fixed names
+    # below: the value comes from the token, and a reason holds no token data.
     if alg.upper().startswith("HS"):
+        name = alg if alg in _HMAC_ALGORITHMS else "an HMAC algorithm"
         raise OIDCTokenVerificationError(
-            f"algorithm {alg} is not allowed: the token is signed with a shared "
+            f"algorithm {name} is not allowed: the token is signed with a shared "
             "secret. An Authentik provider with no signing key does this; select "
             "a signing key on the provider"
         )
     if alg not in ALLOWED_ALGORITHMS:
-        raise OIDCTokenVerificationError(f"algorithm {alg!r} is not allowed")
+        raise OIDCTokenVerificationError("the algorithm of the token is not allowed")
     return alg
 
 
@@ -535,22 +553,36 @@ def select_signing_key(header: dict[str, Any], key_set: KeySet) -> tuple[Any, st
 
 
 async def _fetch_jwks(jwks_uri: str, *, timeout: float) -> KeySet:
+    from joserfc.errors import JoseError
     from joserfc.jwk import KeySet  # deferred -- see module docstring (issue #5)
 
     try:
         async with (
             aiohttp.ClientSession() as session,
             session.get(
-                jwks_uri, timeout=aiohttp.ClientTimeout(total=timeout)
+                jwks_uri,
+                timeout=aiohttp.ClientTimeout(total=timeout),
+                # A redirect could move the keys to plain http (ADR-007).
+                allow_redirects=False,
             ) as response,
         ):
-            response.raise_for_status()
+            _require_ok(response)
             jwks_data = await response.json(content_type=None)
     except (TimeoutError, aiohttp.ClientError, ValueError) as exc:
-        raise OIDCTokenVerificationError(
-            f"failed to fetch JWKS from {jwks_uri}: {exc}"
-        ) from exc
-    return KeySet.import_key_set(jwks_data)
+        raise OIDCTokenVerificationError("failed to fetch the JWKS") from exc
+    try:
+        return KeySet.import_key_set(jwks_data)
+    except (JoseError, TypeError, KeyError, ValueError, AttributeError) as exc:
+        raise OIDCTokenVerificationError("the JWKS is not a valid key set") from exc
+
+
+def _require_ok(response: aiohttp.ClientResponse) -> None:
+    """Raise for any answer that is not 2xx -- also a redirect, which the
+    gate never follows."""
+
+    response.raise_for_status()
+    if response.status >= 300:
+        raise aiohttp.ClientError(f"HTTP {response.status}")
 
 
 async def verify_id_token(
@@ -643,9 +675,11 @@ async def _exchange_code_for_token(
                 discovery["token_endpoint"],
                 data=data,
                 timeout=aiohttp.ClientTimeout(total=timeout),
+                # A 307 or 308 would send the client secret to the new target.
+                allow_redirects=False,
             ) as response,
         ):
-            response.raise_for_status()
+            _require_ok(response)
             return await response.json(content_type=None)
     except (TimeoutError, aiohttp.ClientError, ValueError, KeyError) as exc:
         raise OIDCTokenVerificationError(f"token exchange failed: {exc}") from exc
@@ -711,8 +745,12 @@ def build_oidc_routes(
         try:
             discovery = await fetch_discovery_document(config.issuer_url)
         except OIDCDiscoveryError as exc:
+            # A setup or provider fault, not an authentication failure: a
+            # different text, so fail2ban and crowdsec do not ban for it. The
+            # message names both issuers when they differ (ADR-007).
+            _logger.error("comfyui_curu_auth: OIDC login unavailable: %s", exc)
             raise web.HTTPServiceUnavailable(
-                text="identity provider unreachable"
+                text="identity provider unreachable; see the ComfyUI log"
             ) from exc
         raise web.HTTPFound(build_authorization_url(config, discovery, store))
 
@@ -777,7 +815,9 @@ def build_oidc_routes(
             token_response = await _exchange_code_for_token(
                 config, discovery, code, code_verifier=in_flight.pkce_verifier
             )
-            id_token = token_response["id_token"]
+            id_token = token_response.get("id_token")
+            if not isinstance(id_token, str):
+                _reject_callback(key, reason="no id_token in the token response")
             claims = await verify_id_token(
                 id_token,
                 config=config,
@@ -788,8 +828,6 @@ def build_oidc_routes(
             _reject_callback(key, reason=exc.reason, cause=exc)
         except OIDCDiscoveryError as exc:
             _reject_callback(key, reason="discovery document refused", cause=exc)
-        except KeyError as exc:
-            _reject_callback(key, reason="no id_token in the token response", cause=exc)
 
         if not config.allowlist.permits(claims):
             _reject_callback(key, reason="the person is not on the allowlist")
@@ -827,6 +865,7 @@ __all__ = [
     "check_token_algorithm",
     "discovery_url",
     "fetch_discovery_document",
+    "is_safe_url",
     "read_token_header",
     "resolve_oidc_config",
     "select_signing_key",
