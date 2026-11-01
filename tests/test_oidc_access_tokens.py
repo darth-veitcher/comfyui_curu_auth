@@ -614,3 +614,129 @@ class TestARefusedTokenCountsAndIsLogged:
                 status = response.status
 
         assert status == 429
+
+
+# --------------------------------------------------------------------------
+# User story 2: the settings, and the static credential when they are absent.
+# --------------------------------------------------------------------------
+
+_ISSUER = "https://idp.example.com/auth/v1/"
+
+
+class TestTheSettings:
+    """Scenarios: No audience; An audience with no issuer is a start error."""
+
+    @pytest.mark.parametrize(
+        "settings",
+        [
+            {},
+            {"issuer_url": _ISSUER},
+            {"issuer_url": "", "audience": ""},
+        ],
+    )
+    def test_without_an_audience_the_mode_is_off(
+        self, settings: dict[str, str]
+    ) -> None:
+        from oidc import resolve_resource_server_config
+
+        values = {"issuer_url": None, "audience": None, "required_scopes": None}
+        assert resolve_resource_server_config(**{**values, **settings}) is None
+
+    @pytest.mark.parametrize(
+        ("settings", "message"),
+        [
+            ({"audience": AUDIENCE}, "COMFYUI_CURU_AUTH_OIDC_ISSUER_URL"),
+            ({"required_scopes": "comfy"}, "COMFYUI_CURU_AUTH_OIDC_AUDIENCE"),
+            (
+                {"issuer_url": _ISSUER, "required_scopes": "comfy"},
+                "COMFYUI_CURU_AUTH_OIDC_AUDIENCE",
+            ),
+            ({"issuer_url": "http://idp.lan/", "audience": AUDIENCE}, "https"),
+        ],
+    )
+    def test_a_partial_or_unsafe_setup_is_a_start_error(
+        self, settings: dict[str, str], message: str
+    ) -> None:
+        from oidc import OIDCConfigError, resolve_resource_server_config
+
+        values = {"issuer_url": None, "audience": None, "required_scopes": None}
+        with pytest.raises(OIDCConfigError) as refused:
+            resolve_resource_server_config(**{**values, **settings})
+
+        assert message in str(refused.value)
+
+    def test_issuer_and_audience_turn_the_mode_on(self) -> None:
+        from oidc import resolve_resource_server_config
+
+        config = resolve_resource_server_config(
+            issuer_url=_ISSUER, audience=AUDIENCE, required_scopes="comfy, comfy write"
+        )
+
+        assert config is not None
+        assert (config.issuer_url, config.audience) == (_ISSUER, AUDIENCE)
+        assert config.required_scopes == ("comfy", "write")
+
+
+async def _queue_through_init(
+    monkeypatch: pytest.MonkeyPatch, env: dict[str, str], token: str
+) -> int:
+    """GET /queue with ``token`` through the real __init__.py wiring."""
+    from aiohttp.test_utils import TestClient, TestServer
+
+    from tests.test_oidc import _load_init_with_fake_server
+
+    app = _load_init_with_fake_server(monkeypatch, oidc_env=env)
+    app.router.add_get("/queue", _queue)
+    async with TestClient(TestServer(app)) as client:
+        response = await client.get("/queue", headers=_bearer(token))
+        return response.status
+
+
+class TestTheWiringOfInit:
+    """Scenarios: No audience; An audience with no issuer keeps the gate on."""
+
+    async def test_issuer_and_audience_accept_a_token(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        async with FakeIssuer() as issuer:
+            status = await _queue_through_init(
+                monkeypatch,
+                {
+                    "COMFYUI_CURU_AUTH_OIDC_ISSUER_URL": issuer.issuer,
+                    "COMFYUI_CURU_AUTH_OIDC_AUDIENCE": AUDIENCE,
+                    "COMFYUI_CURU_AUTH_OIDC_REQUIRED_SCOPES": "comfy",
+                },
+                issuer.access_token(),
+            )
+
+        assert status == 200
+
+    async def test_no_audience_refuses_a_token(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        async with FakeIssuer() as issuer:
+            status = await _queue_through_init(
+                monkeypatch,
+                {"COMFYUI_CURU_AUTH_OIDC_ISSUER_URL": issuer.issuer},
+                issuer.access_token(),
+            )
+
+        assert status == 401
+
+    async def test_an_audience_with_no_issuer_logs_an_error_and_keeps_the_gate(
+        self, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        async with FakeIssuer() as issuer:
+            with caplog.at_level("ERROR", logger="comfyui_curu_auth"):
+                status = await _queue_through_init(
+                    monkeypatch,
+                    {"COMFYUI_CURU_AUTH_OIDC_AUDIENCE": AUDIENCE},
+                    issuer.access_token(),
+                )
+
+        assert status == 401
+        assert any(
+            "COMFYUI_CURU_AUTH_OIDC_ISSUER_URL" in r.getMessage()
+            for r in caplog.records
+            if r.levelname == "ERROR"
+        )
