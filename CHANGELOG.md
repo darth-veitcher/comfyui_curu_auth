@@ -40,6 +40,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 <!-- version list -->
 
+## v2.0.0 (2026-11-01)
+
+### Features
+
+- **oidc**: Make the OIDC login work with rauthy, Authentik and other providers
+  ([#18](https://github.com/darth-veitcher/comfyui_curu_auth/pull/18),
+  [`5136021`](https://github.com/darth-veitcher/comfyui_curu_auth/commit/5136021ed03c00dc18e044c4d87915bd072e31d6))
+
+### Breaking Changes
+
+- **oidc**: The OIDC login now needs COMFYUI_CURU_AUTH_OIDC_ALLOWED_SUBJECTS, _ALLOWED_EMAILS,
+  _ALLOWED_DOMAIN or _ALLOW_ANY_USER=true. Without one, the OIDC login stays off and only the
+  credential works.
+
+
 ## v1.0.1 (2026-10-16)
 
 ### Bug Fixes

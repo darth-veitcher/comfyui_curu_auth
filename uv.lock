@@ -1,5 +1,5 @@
 version = 1
-revision = 3
+revision = 5
 requires-python = ">=3.12"
 
 [[package]]
@@ -229,7 +229,7 @@ wheels = [
 
 [[package]]
 name = "comfyui-curu-auth"
-version = "1.0.1"
+version = "2.0.0"
 source = { virtual = "." }
 dependencies = [
     { name = "aiohttp" },
