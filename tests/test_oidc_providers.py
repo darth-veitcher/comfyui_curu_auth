@@ -542,7 +542,7 @@ class TestTheAllowlist:
         assert response.status == 401
 
 
-_FULL = {
+_FULL: dict[str, Any] = {
     "issuer_url": "https://idp.example.com/",
     "client_id": CLIENT_ID,
     "client_secret": CLIENT_SECRET,
