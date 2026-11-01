@@ -649,3 +649,84 @@ class TestStartWithNoAllowlist:
         )
 
         assert {START, CALLBACK} <= _registered_paths(app)
+
+
+# --------------------------------------------------------------------------
+# User story 4: set the scopes of the login.
+# --------------------------------------------------------------------------
+
+
+class TestTheScopes:
+    """Scenarios: The default scopes; A scopes setting."""
+
+    @pytest.mark.parametrize(
+        ("setting", "expected"),
+        [
+            (None, ("openid", "profile", "email")),
+            ("", ("openid", "profile", "email")),
+            ("profile", ("openid", "profile")),
+            ("openid,email", ("openid", "email")),
+            ("email openid", ("openid", "email")),
+            ("profile, profile groups", ("openid", "profile", "groups")),
+        ],
+    )
+    def test_the_setting_always_includes_openid(
+        self, setting: str | None, expected: tuple[str, ...]
+    ) -> None:
+        from oidc import resolve_oidc_config
+
+        config = resolve_oidc_config(**_FULL, allow_any_user="true", scopes=setting)
+
+        assert config is not None
+        assert config.scopes == expected
+
+    @pytest.mark.parametrize(
+        ("scopes", "expected"),
+        [
+            (None, "openid profile email"),
+            (("openid", "profile"), "openid profile"),
+        ],
+    )
+    def test_the_authorization_url_asks_for_the_scopes(
+        self, scopes: tuple[str, ...] | None, expected: str
+    ) -> None:
+        from oidc import (
+            AuthorizationRequestStore,
+            LoginAllowlist,
+            OIDCConfig,
+            build_authorization_url,
+        )
+
+        extra: dict[str, Any] = {} if scopes is None else {"scopes": scopes}
+        config = OIDCConfig(**_FULL, allowlist=LoginAllowlist(), **extra)
+        url = build_authorization_url(
+            config,
+            {"authorization_endpoint": "https://idp.example.com/authorize"},
+            AuthorizationRequestStore(),
+        )
+
+        assert parse_qs(urlsplit(url).query)["scope"] == [expected]
+
+    async def test_init_reads_the_scopes_setting(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        from tests.test_oidc import _load_init_with_fake_server
+
+        async with FakeIssuer() as issuer:
+            app = _load_init_with_fake_server(
+                monkeypatch,
+                oidc_env={
+                    "COMFYUI_CURU_AUTH_OIDC_ISSUER_URL": issuer.issuer,
+                    "COMFYUI_CURU_AUTH_OIDC_CLIENT_ID": CLIENT_ID,
+                    "COMFYUI_CURU_AUTH_OIDC_CLIENT_SECRET": CLIENT_SECRET,
+                    "COMFYUI_CURU_AUTH_OIDC_REDIRECT_URI": "https://h/cb",
+                    "COMFYUI_CURU_AUTH_OIDC_ALLOW_ANY_USER": "true",
+                    "COMFYUI_CURU_AUTH_OIDC_SCOPES": "profile groups",
+                },
+            )
+            async with TestClient(TestServer(app)) as client:
+                response = await client.get(START, allow_redirects=False)
+
+        assert response.status == 302
+        query = parse_qs(urlsplit(response.headers["Location"]).query)
+        assert query["scope"] == ["openid profile groups"]
