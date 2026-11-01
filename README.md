@@ -164,7 +164,7 @@ The gate accepts a token only when each of these is true:
 
 The same check applies to the `/ws` handshake. A refused token gets HTTP 401 and counts as one failure, also during a wait. A valid token passes also during a wait, because nobody can guess one. So the next request of comfy-mcp, with a new token, passes.
 
-When the gate cannot read the keys of the identity provider, a token gets HTTP 503. This is not a failure of the caller: it does not count, and the log line is not an `authentication failure` line.
+When the gate has no keys of the identity provider, because it could not read them one time, a token gets HTTP 503. When a later read fails, the gate keeps the old keys. A 503 is not a failure of the caller: it does not count, and the log line is not an `authentication failure` line.
 
 The gate keeps the keys of the issuer in memory. It reads them again for an unknown key, at most one time in 60 seconds. It also reads them again when they are 1 hour old, so a key that the identity provider removed stops working. [Connect an identity provider](docs/oidc-providers.md#let-programs-send-access-tokens) says which providers can give such tokens.
 
@@ -185,7 +185,7 @@ To check your proxy, log in through it and read the `Set-Cookie` of the response
 
 <img src="docs/screenshots/rate-limited.png" width="480" alt="Rate-limited login screen with a live countdown">
 
-After a wrong credential, the gate makes that caller wait before its next try. A caller is one client address. The wait doubles after each failure: 1 s, 2 s, 4 s, and up to 5 minutes. During the wait, a program gets HTTP 429 with `Retry-After`, except for an access token, which gets its real answer. A browser goes to the login page. A correct attempt sets the wait to zero again. The login page shows a countdown, so you do not need to reload it.
+After a wrong credential, the gate makes that caller wait before its next try. A caller is one client address. The wait doubles after each failure: 1 s, 2 s, 4 s, and up to 5 minutes. During the wait, a program gets HTTP 429 with `Retry-After`, except for an access token when the access tokens are on. The gate checks such a token and gives the answer of ComfyUI, HTTP 401 or HTTP 503. A browser goes to the login page. A correct attempt sets the wait to zero again. The login page shows a countdown, so you do not need to reload it.
 
 The same wait applies to the login form, the Bearer header, access tokens and the OIDC login. Each request to `/curu-auth/oidc/start` counts as one failure, because each one makes the gate read the discovery document. A correct callback sets the wait to zero again. A session that is already open is never blocked.
 

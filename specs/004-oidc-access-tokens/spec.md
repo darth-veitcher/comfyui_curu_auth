@@ -142,7 +142,7 @@ comfy-mcp gets a new token after a 401 and tries again at once. That second atte
 - **FR-021**: When the gate has no keys of the issuer, a token MUST get HTTP 503 with no failure (review finding).
 - **FR-022**: The gate MUST read keys again when they are 1 hour old (review finding).
 - **FR-023**: A refused token in a wait MUST get HTTP 401, not HTTP 429 (review finding).
-- **FR-024**: A header outside Latin-1 MUST be a wrong credential, not HTTP 500 (issue #19).
+- **FR-024**: An `Authorization` header outside Latin-1 MUST be a wrong credential, not HTTP 500 (issue #19).
 
 ### Key Entities
 

@@ -86,7 +86,7 @@ The reasons are these:
 - **Good:** the static credential and its rate limit do not change.
 - **Cost:** a token cannot be revoked before its `exp`. The lifetime limit of 1 hour bounds the risk.
 - **Cost:** while an address waits, the gate still checks each JWT that it gets. Checks 1 to 4 are cheap, and the read of the JWKS has its own limit.
-- **Cost:** each refused token writes a log line, also in a wait. A caller can write one line for each request with a value such as `Bearer a.b.c`. fail2ban and crowdsec read these lines and block that caller at the network.
+- **Cost:** each refused token writes a log line, also in a wait. A caller can write one line for each request with a value such as `Bearer a.b.c`. When the operator installs fail2ban or crowdsec from `contrib/`, they read these lines and block that caller at the network.
 - **Cost:** Google and Microsoft Entra ID cannot give tokens for programs that pass these checks.
 - **Escape route:** the gate gets the check as one function. A later change, for example token introspection, replaces that function only.
 

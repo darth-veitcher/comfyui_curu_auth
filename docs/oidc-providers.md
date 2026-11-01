@@ -5,7 +5,7 @@ This page tells you how to connect the browser login, and the access tokens of p
 Each fact has a source:
 
 - **Tested live**: a test of this repository runs it against the real provider.
-- **Provider documentation**: the fact comes from the documentation of the provider, or from the tests of the sister projects comfy-mcp and curu-memory. No test of this repository runs it.
+- **Provider documentation**: the fact comes from the documentation of the provider. No test of this repository runs it.
 
 ## Check what the gate needs from any provider
 
@@ -143,12 +143,11 @@ A program can send an access token of the identity provider in the Bearer header
 | Send the client secret in the form. rauthy 0.37.2 refuses HTTP Basic on this grant. | Tested live (0.37.2) |
 | Send `resource=<audience>` in the token request. rauthy then puts it in `aud`, and the gate accepts the token. | Tested live (0.37.2) |
 | Set `allowed_resources` of the client with the admin API. | Tested live (0.37.2) |
-| The bootstrap files of 0.37.2 cannot set `allowed_resources`. | Provider documentation |
 | A token for another resource has another `aud`. The gate refuses it with HTTP 401. | Tested live (0.37.2) |
 | A token with no `resource` does not hold the audience in `aud`. The gate refuses it. | Tested live (0.37.2) |
 | rauthy refuses a `resource` that is not in `allowed_resources`, with `invalid_target`. | Tested live (0.37.2) |
 | A `client_credentials` token holds the `default_scopes` of the client. Put each required scope in `default_scopes`. | Tested live (0.37.2) |
-| A `client_credentials` token has `typ` `at+jwt`. | Provider documentation |
+| A `client_credentials` token has `typ` `at+jwt`. | Tested live (0.37.2) |
 
 ### Authentik
 
@@ -218,7 +217,8 @@ The gate writes one line for each login that the callback refuses, and for each 
 | `token refused: ID token or no client id and scope` | Send an access token, not an ID token. Give the client a scope. |
 | `token refused: missing scope` | Give the client each scope of `COMFYUI_CURU_AUTH_OIDC_REQUIRED_SCOPES`. |
 | `token refused: wrong issuer` or `wrong token type` | Get the token from the configured issuer, as an access token. |
-| `token refused: bad signature`, `malformed token`, `unknown key` or an algorithm reason | The token is not from a key of the issuer. Get a new token. |
+| `token refused: missing claim` | The token has no `iss`, `aud`, `exp` or `iat`. Make the identity provider put each one in the access token. |
+| `token refused: bad signature`, `malformed token` or an algorithm reason | The token is not from a key of the issuer. Get a new token. |
 | `identity provider unavailable` (HTTP 503) | The gate has no keys of the issuer. Look for `cannot read the OIDC keys` in the log. |
 | `cannot read the OIDC keys` | Make sure that the identity provider is available. The gate tries again after 60 seconds at the earliest. |
-| `unknown key` | The identity provider changed its keys during the login: try again. Or the ID token has no `kid`, and the JWKS has more than one signing key. Then make the identity provider send `kid`. |
+| `unknown key` | The identity provider changed its keys: try again after 60 seconds. Or the token has no `kid`, and the JWKS has more than one signing key. Then make the identity provider send `kid`. |

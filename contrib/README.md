@@ -11,9 +11,9 @@ comfyui_curu_auth: authentication failure from 203.0.113.7 (GET /queue: token re
 
 The patterns below match the prefix `authentication failure from <IP>`, so each form matches. An outage of the identity provider writes `identity provider unavailable` or `OIDC login unavailable` instead, and these patterns do not match it.
 
-The gate itself has no ban list of its own — these files wire that log
-line into a real IP-blocking tool instead, so repeat offenders get
-blocked at the network level, entirely outside this process. Pick one.
+The gate has no ban list of its own. These files connect that log line
+to a real IP-blocking tool. That tool blocks repeat offenders at the
+network, outside the ComfyUI process. Pick one.
 
 ## fail2ban
 
@@ -26,9 +26,8 @@ blocked at the network level, entirely outside this process. Pick one.
    ```bash
    fail2ban-regex /path/to/comfyui/output.log fail2ban/comfyui-curu-auth.conf
    ```
-3. Copy the jail definition, then edit its `logpath` (or switch to the
-   commented-out `journalmatch` line if ComfyUI logs to the systemd
-   journal instead of a file):
+3. Copy the jail definition, and set its `logpath`. If ComfyUI logs to
+   the systemd journal, use the `journalmatch` line in place of it:
    ```bash
    cp fail2ban/jail-comfyui-curu-auth.local /etc/fail2ban/jail.d/comfyui-curu-auth.local
    ```
@@ -38,9 +37,9 @@ blocked at the network level, entirely outside this process. Pick one.
    fail2ban-client status comfyui-curu-auth
    ```
 
-`maxretry`/`findtime`/`bantime` in the jail file are fail2ban's own
-standard options (5 failures inside 10 minutes bans for 1 hour, as
-shipped) — tune them the same way you would for any other jail.
+`maxretry`, `findtime` and `bantime` in the jail file are standard
+fail2ban options. As shipped, 5 failures in 10 minutes give a ban of 1
+hour. Change them as for any other jail.
 
 ## crowdsec
 
@@ -64,15 +63,14 @@ shipped) — tune them the same way you would for any other jail.
    systemctl reload crowdsec
    cscli scenarios list
    ```
-4. Confirm the parser/scenario actually match a real log line before
-   trusting it in production — this pair follows crowdsec's own
-   documented YAML syntax but hasn't been exercised against a live
-   crowdsec instance itself:
+4. Make sure that the parser and the scenario match a real log line
+   before you use them in production. They follow the documented YAML
+   syntax of crowdsec, but no test ran them against a live crowdsec:
    ```bash
    cscli explain --file /path/to/comfyui/output.log --type syslog
    ```
 
-If step 4 doesn't show `comfyui_curu_auth_auth_fail` being parsed and
-the `comfyui-curu-auth/bruteforce` scenario triggering on repeated
-lines, check `acquis.yaml`'s log source path first — that's the most
-common reason a correctly-installed parser never sees any events.
+If step 4 does not show `comfyui_curu_auth_auth_fail` and the
+`comfyui-curu-auth/bruteforce` scenario on repeated lines, check the log
+path in `acquis.yaml` first. A wrong path is the usual reason that a
+correct parser sees no events.
