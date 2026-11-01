@@ -70,7 +70,7 @@ class FakeIssuer:
         self.login_claims: dict[str, Any] = {"sub": "user-1"}
         self.login_kid = "rsa-1"
         #: The nonce of the last authorization request. A test copies it here.
-        self.nonce = ""
+        self.nonce = "fake-nonce"
         self._server: TestServer | None = None
 
     def add_key(self, kid: str, alg: str) -> None:

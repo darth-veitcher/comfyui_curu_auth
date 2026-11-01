@@ -186,3 +186,220 @@ class TestTheKeySetsTheAlgorithm:
 
         assert response.status == 302, await response.text()
         assert _session_cookie(response)
+
+
+# --------------------------------------------------------------------------
+# User story 3: the gate refuses an unsafe provider or token.
+# --------------------------------------------------------------------------
+
+
+async def _verify(issuer: FakeIssuer, token: str) -> dict[str, Any]:
+    """Check ``token`` as the callback does, with the nonce of the issuer."""
+    from oidc import fetch_discovery_document, verify_id_token
+
+    discovery = await fetch_discovery_document(issuer.issuer)
+    return await verify_id_token(
+        token, config=_config(issuer), discovery=discovery, expected_nonce=issuer.nonce
+    )
+
+
+class TestTheGateRefusesUnsafeAlgorithms:
+    """Scenarios: alg none; Key confusion; The HS256 reason."""
+
+    async def test_alg_none_is_refused_before_the_jwks_is_read(self) -> None:
+        from oidc import OIDCTokenVerificationError
+
+        async with FakeIssuer() as issuer:
+            with pytest.raises(OIDCTokenVerificationError):
+                await _verify(issuer, issuer.none_token())
+            reads = issuer.jwks_reads
+
+        assert reads == 0
+
+    async def test_hs256_signed_with_the_public_key_is_refused(self) -> None:
+        """The key-confusion attack: the public key as the HMAC secret."""
+        from oidc import OIDCTokenVerificationError
+
+        async with FakeIssuer() as issuer:
+            token = issuer.hs256_token(issuer.public_pem("rsa-1"))
+            with pytest.raises(OIDCTokenVerificationError):
+                await _verify(issuer, token)
+            reads = issuer.jwks_reads
+
+        assert reads == 0
+
+    async def test_the_hs256_reason_names_the_signing_key_of_authentik(
+        self,
+    ) -> None:
+        from oidc import OIDCTokenVerificationError
+
+        async with FakeIssuer() as issuer:
+            token = issuer.hs256_token(CLIENT_SECRET.encode())
+            with pytest.raises(OIDCTokenVerificationError) as refused:
+                await _verify(issuer, token)
+
+        assert "HS256" in refused.value.reason
+        assert "Authentik" in refused.value.reason
+        assert "signing key" in refused.value.reason
+
+    @pytest.mark.parametrize("alg", ["HS384", "HS512", "None", "ES512", "RS1"])
+    async def test_each_other_algorithm_is_refused(self, alg: str) -> None:
+        import base64
+        import json
+
+        from oidc import OIDCTokenVerificationError
+
+        async with FakeIssuer() as issuer:
+            _header, _, rest = issuer.id_token(kid="rsa-1").partition(".")
+            header = json.dumps({"alg": alg, "kid": "rsa-1"}).encode()
+            forged = base64.urlsafe_b64encode(header).rstrip(b"=").decode()
+            with pytest.raises(OIDCTokenVerificationError):
+                await _verify(issuer, f"{forged}.{rest}")
+            reads = issuer.jwks_reads
+
+        assert reads == 0
+
+    async def test_a_header_alg_that_is_not_the_key_alg_is_refused(self) -> None:
+        from oidc import OIDCTokenVerificationError
+
+        async with FakeIssuer() as issuer:
+            issuer.add_key("rsa-2", "RS384")
+            # Signed with RS384, but the header names the RS256 key.
+            token = issuer.id_token(kid="rsa-2", header={"kid": "rsa-1"})
+            with pytest.raises(OIDCTokenVerificationError):
+                await _verify(issuer, token)
+
+    async def test_an_unknown_kid_is_refused(self) -> None:
+        from oidc import OIDCTokenVerificationError
+
+        async with FakeIssuer() as issuer:
+            token = issuer.id_token(kid="ec-1", header={"kid": "nobody"})
+            with pytest.raises(OIDCTokenVerificationError):
+                await _verify(issuer, token)
+
+
+ENDPOINTS = ["authorization_endpoint", "token_endpoint", "jwks_uri"]
+
+
+class TestTheDiscoveryDocumentIsChecked:
+    """Scenario: An http endpoint."""
+
+    @pytest.mark.parametrize("endpoint", ENDPOINTS)
+    async def test_an_http_endpoint_off_loopback_is_refused(
+        self, endpoint: str
+    ) -> None:
+        from oidc import OIDCDiscoveryError, fetch_discovery_document
+
+        async with FakeIssuer() as issuer:
+            issuer.discovery_overrides[endpoint] = "http://idp.example.com/x"
+            with pytest.raises(OIDCDiscoveryError) as refused:
+                await fetch_discovery_document(issuer.issuer)
+
+        assert endpoint in str(refused.value)
+
+    @pytest.mark.parametrize("endpoint", ENDPOINTS)
+    async def test_a_missing_endpoint_is_refused(self, endpoint: str) -> None:
+        from oidc import OIDCDiscoveryError, fetch_discovery_document
+
+        async with FakeIssuer() as issuer:
+            issuer.discovery_overrides[endpoint] = None
+            with pytest.raises(OIDCDiscoveryError):
+                await fetch_discovery_document(issuer.issuer)
+
+    @pytest.mark.parametrize(
+        "url",
+        [
+            "https://idp.example.com/x",
+            "http://localhost:9/x",
+            "http://127.0.0.1:9/x",
+            "http://[::1]:9/x",
+        ],
+    )
+    async def test_https_and_loopback_http_are_accepted(self, url: str) -> None:
+        from oidc import fetch_discovery_document
+
+        async with FakeIssuer() as issuer:
+            issuer.discovery_overrides["authorization_endpoint"] = url
+            document = await fetch_discovery_document(issuer.issuer)
+
+        assert document["authorization_endpoint"] == url
+
+    async def test_an_http_endpoint_off_loopback_stops_the_login(self) -> None:
+        async with FakeIssuer() as issuer:
+            issuer.discovery_overrides["token_endpoint"] = "http://idp.example.com/t"
+            from oidc import AuthorizationRequestStore, build_oidc_routes
+
+            start, _callback = build_oidc_routes(
+                _config(issuer),
+                sessions=SessionStore(),
+                store=AuthorizationRequestStore(),
+            )
+            app = web.Application()
+            app.router.add_get(START, start)
+            async with TestClient(TestServer(app)) as client:
+                response = await client.get(START, allow_redirects=False)
+
+        assert response.status == 503
+
+
+class TestTheClaimsOfAnIdToken:
+    """Scenarios: No exp or no iat; A wrong azp; The clock leeway."""
+
+    @pytest.mark.parametrize("claim", ["exp", "iat"])
+    async def test_a_token_with_no_exp_or_no_iat_is_refused(self, claim: str) -> None:
+        from oidc import OIDCTokenVerificationError
+
+        async with FakeIssuer() as issuer:
+            token = issuer.id_token(**{claim: None})
+            with pytest.raises(OIDCTokenVerificationError):
+                await _verify(issuer, token)
+
+    @pytest.mark.parametrize(
+        ("aud", "azp", "accepted"),
+        [
+            ([CLIENT_ID, "other-client"], "other-client", False),
+            ([CLIENT_ID, "other-client"], None, False),
+            ([CLIENT_ID, "other-client"], CLIENT_ID, True),
+            (CLIENT_ID, "other-client", False),
+            (CLIENT_ID, CLIENT_ID, True),
+            ([CLIENT_ID], None, True),
+        ],
+    )
+    async def test_azp_must_be_the_client_id(
+        self, aud: Any, azp: str | None, accepted: bool
+    ) -> None:
+        from oidc import OIDCTokenVerificationError
+
+        async with FakeIssuer() as issuer:
+            token = issuer.id_token(aud=aud, azp=azp)
+            if accepted:
+                claims = await _verify(issuer, token)
+                assert claims["aud"] == aud
+            else:
+                with pytest.raises(OIDCTokenVerificationError):
+                    await _verify(issuer, token)
+
+    @pytest.mark.parametrize(
+        ("exp_offset", "iat_offset", "accepted"),
+        [
+            (-30, -330, True),
+            (-90, -390, False),
+            (300, 30, True),
+            (300, 90, False),
+        ],
+    )
+    async def test_the_clock_leeway_is_60_seconds(
+        self, exp_offset: int, iat_offset: int, accepted: bool
+    ) -> None:
+        import time
+
+        from oidc import OIDCTokenVerificationError
+
+        now = int(time.time())
+        async with FakeIssuer() as issuer:
+            token = issuer.id_token(exp=now + exp_offset, iat=now + iat_offset)
+            if accepted:
+                await _verify(issuer, token)
+            else:
+                with pytest.raises(OIDCTokenVerificationError):
+                    await _verify(issuer, token)
