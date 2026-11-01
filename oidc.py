@@ -181,6 +181,7 @@ def resolve_oidc_config(
     allowed_emails: str | None = None,
     allowed_domain: str | None = None,
     allow_any_user: str | None = None,
+    scopes: str | None = None,
 ) -> OIDCConfig | None:
     """``OIDCConfig`` if all four values are real, non-empty strings and an
     allowlist is set; ``None`` if any of the four is missing -- never a
@@ -194,6 +195,10 @@ def resolve_oidc_config(
     empty variable counts as not set. ``allow_any_user`` is true only for
     the word ``true``, with any capital letters; any other value is false,
     so a typing error fails closed.
+
+    ``scopes`` is a list with a comma or a space between the items. The
+    result always starts with ``openid``, and has no item twice. With no
+    value, it is :data:`DEFAULT_SCOPES`.
     """
 
     if not (issuer_url and client_id and client_secret and redirect_uri):
@@ -219,7 +224,17 @@ def resolve_oidc_config(
         client_secret=client_secret,
         redirect_uri=redirect_uri,
         allowlist=allowlist,
+        scopes=_scopes(scopes),
     )
+
+
+def _scopes(setting: str | None) -> tuple[str, ...]:
+    """The scopes of ``setting``, with ``openid`` first and no item twice."""
+
+    items = _split(setting)
+    if not items:
+        return DEFAULT_SCOPES
+    return tuple(dict.fromkeys(["openid", *items]))
 
 
 def discovery_url(issuer_url: str) -> str:
@@ -386,12 +401,11 @@ def build_authorization_url(
     config: OIDCConfig,
     discovery: dict[str, Any],
     store: AuthorizationRequestStore,
-    *,
-    scope: str = "openid profile email",
 ) -> str:
     """Build the redirect URL to the identity provider's authorization
     endpoint, recording a matching :class:`InFlightAuthRequest` in
-    ``store`` keyed by the `state` it generates.
+    ``store`` keyed by the `state` it generates. The scope is
+    ``config.scopes`` (spec 003).
     """
 
     in_flight = store.create()
@@ -399,7 +413,7 @@ def build_authorization_url(
         "client_id": config.client_id,
         "redirect_uri": config.redirect_uri,
         "response_type": "code",
-        "scope": scope,
+        "scope": " ".join(config.scopes),
         "state": in_flight.state,
         "nonce": in_flight.nonce,
         "code_challenge": _pkce_challenge(in_flight.pkce_verifier),

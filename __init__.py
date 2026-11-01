@@ -123,6 +123,7 @@ if server is not None:
             allowed_emails=os.environ.get("COMFYUI_CURU_AUTH_OIDC_ALLOWED_EMAILS"),
             allowed_domain=os.environ.get("COMFYUI_CURU_AUTH_OIDC_ALLOWED_DOMAIN"),
             allow_any_user=os.environ.get("COMFYUI_CURU_AUTH_OIDC_ALLOW_ANY_USER"),
+            scopes=os.environ.get("COMFYUI_CURU_AUTH_OIDC_SCOPES"),
         )
     except OIDCConfigError as _error:
         logging.getLogger("comfyui_curu_auth").error("comfyui_curu_auth: %s", _error)
