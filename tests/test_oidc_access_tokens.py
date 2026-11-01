@@ -180,6 +180,21 @@ class TestTheGateRefusesABadToken:
 
         assert reason == "lifetime too long"
 
+    async def test_a_lifetime_of_3601_seconds_is_refused(self) -> None:
+        async with FakeIssuer() as issuer:
+            reason = await self._refused(issuer, issuer.access_token(lifetime=3601))
+
+        assert reason == "lifetime too long"
+
+    async def test_a_token_that_expires_now_is_refused(self) -> None:
+        """No leeway at all for exp: exp equal to the time now is expired."""
+        now = int(time.time())
+        async with FakeIssuer() as issuer:
+            token = issuer.access_token(issued=now - 300, lifetime=300)
+            reason = await self._refused(issuer, token)
+
+        assert reason == "expired"
+
     async def test_a_lifetime_of_1_hour_passes(self) -> None:
         async with FakeIssuer() as issuer:
             await _check(issuer, issuer.access_token(lifetime=3600))
@@ -535,7 +550,8 @@ class TestARefusedTokenCountsAndIsLogged:
         ) in messages
         for part in token.split("."):
             assert not any(part in m for m in messages)
-        assert limiter.seconds_until_retry("127.0.0.1") > 0
+        # Exactly one failure: the first wait is base_delay (1 second).
+        assert 0 < limiter.seconds_until_retry("127.0.0.1") <= 1.0
 
     async def test_an_accepted_token_logs_its_client_and_subject_at_debug(
         self, caplog: pytest.LogCaptureFixture
@@ -575,9 +591,12 @@ class TestARefusedTokenCountsAndIsLogged:
         # The valid token also clears the failure of the first one.
         assert limiter.seconds_until_retry("127.0.0.1") == 0
 
-    async def test_two_refused_tokens_get_429(
+    async def test_a_refused_token_in_a_wait_gets_401_and_counts(
         self, caplog: pytest.LogCaptureFixture
     ) -> None:
+        """A token is checked also in a wait, so it gets its real answer, 401,
+        and counts. So two requests of comfy-mcp at once, with one refused
+        token, both get 401, and both retry with a new token (ADR-008)."""
         from aiohttp.test_utils import TestClient, TestServer
 
         from gate import RateLimiter
@@ -592,12 +611,17 @@ class TestARefusedTokenCountsAndIsLogged:
                     second = await client.get("/queue", headers=_bearer(bad))
                     statuses = (first.status, second.status)
 
-        assert statuses == (401, 429)
-        refusals = [
-            r.getMessage() for r in caplog.records if "token refused" in r.getMessage()
+        assert statuses == (401, 401)
+        failures = [
+            r.getMessage()
+            for r in caplog.records
+            if "authentication failure from" in r.getMessage()
         ]
-        # Each refused token writes its line, also the one in the wait.
-        assert len(refusals) == 2
+        # One line for each refused token, with its reason.
+        assert len(failures) == 2
+        assert all("token refused: wrong audience" in m for m in failures)
+        # Two failures: the wait is now 2 seconds.
+        assert limiter.seconds_until_retry("127.0.0.1") > 1.0
 
     async def test_the_static_credential_still_waits_in_a_backoff(self) -> None:
         """FR-004 of spec 002: a correct static credential in a wait gets 429."""
@@ -740,3 +764,100 @@ class TestTheWiringOfInit:
             for r in caplog.records
             if r.levelname == "ERROR"
         )
+
+
+# --------------------------------------------------------------------------
+# Review of spec 004: provider faults, key age, the header encoding.
+# --------------------------------------------------------------------------
+
+
+class TestAnIdentityProviderOutageIsNotAFailure:
+    """When the gate cannot read the keys, the caller did nothing wrong: 503,
+    no failure in the wait, and no "authentication failure" line, so fail2ban
+    does not ban comfy-mcp for an outage of the identity provider."""
+
+    async def test_no_keys_gives_503_and_no_failure(
+        self, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        from aiohttp.test_utils import TestClient, TestServer
+
+        from gate import RateLimiter
+
+        limiter = RateLimiter()
+        async with FakeIssuer() as issuer:
+            issuer.jwks_override = "not a key set"
+            app = _gate_app(issuer, limiter=limiter)
+            with caplog.at_level("WARNING", logger="comfyui_curu_auth"):
+                async with TestClient(TestServer(app)) as client:
+                    response = await client.get(
+                        "/queue", headers=_bearer(issuer.access_token())
+                    )
+                    status = response.status
+
+        messages = [r.getMessage() for r in caplog.records]
+        assert status == 503
+        assert limiter.seconds_until_retry("127.0.0.1") == 0
+        assert not any("authentication failure" in m for m in messages), messages
+        assert any("identity provider unavailable" in m for m in messages), messages
+
+
+class TestTheKeysHaveAMaximumAge:
+    """A key that the identity provider removed is not trusted for ever."""
+
+    async def test_after_1_hour_the_keys_are_read_again(self) -> None:
+        from oidc import IssuerKeys, OIDCTokenVerificationError
+
+        clock = [1000.0]
+        async with FakeIssuer() as issuer:
+            keys = IssuerKeys(issuer.issuer, clock=lambda: clock[0])
+            token = issuer.access_token(kid="rsa-1")
+            await _check(issuer, token, keys=keys)
+            del issuer.keys["rsa-1"]
+            clock[0] += 3599
+            await _check(issuer, token, keys=keys)
+            reads_before = issuer.jwks_reads
+            clock[0] += 2
+            with pytest.raises(OIDCTokenVerificationError) as refused:
+                await _check(issuer, token, keys=keys)
+            reads_after = issuer.jwks_reads
+
+        assert (reads_before, reads_after) == (1, 2)
+        assert refused.value.reason == "unknown key"
+
+    async def test_a_failed_read_at_the_maximum_age_keeps_the_old_keys(self) -> None:
+        from oidc import IssuerKeys
+
+        clock = [1000.0]
+        async with FakeIssuer() as issuer:
+            keys = IssuerKeys(issuer.issuer, clock=lambda: clock[0])
+            await _check(issuer, issuer.access_token(), keys=keys)
+            issuer.jwks_override = "not a key set"
+            clock[0] += 3601
+            claims = await _check(issuer, issuer.access_token(), keys=keys)
+
+        assert claims["azp"] == PROGRAM_ID
+
+
+class TestAHeaderThatIsNotLatin1:
+    """Issue #19: a header outside Latin-1 gave HTTP 500."""
+
+    @pytest.mark.parametrize("with_mode", [False, True])
+    async def test_it_is_a_wrong_credential(self, with_mode: bool) -> None:
+        from aiohttp.test_utils import TestClient, TestServer
+
+        from gate import RateLimiter
+
+        limiter = RateLimiter()
+        async with FakeIssuer() as issuer:
+            app = _gate_app(
+                issuer, limiter=limiter, token_check="default" if with_mode else None
+            )
+            async with TestClient(TestServer(app)) as client:
+                first = await client.get(
+                    "/queue", headers=_bearer("\u20ac.\u20ac.\u20ac")
+                )
+                second = await client.get("/queue", headers=_bearer("\u20ac"))
+                statuses = (first.status, second.status)
+
+        # The first counts as a failure, so the second is in a wait.
+        assert statuses == (401, 429)
