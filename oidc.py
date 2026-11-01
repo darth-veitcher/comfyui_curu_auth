@@ -28,9 +28,11 @@ from __future__ import annotations
 
 import base64
 import hashlib
+import json
 import logging
 import secrets
 import time
+import warnings
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, NoReturn
 from urllib.parse import urlencode
@@ -133,32 +135,62 @@ def resolve_oidc_config(
     return None
 
 
+def discovery_url(issuer_url: str) -> str:
+    """The URL of the discovery document of ``issuer_url``.
+
+    Removes each ``/`` at the end of the issuer before it adds the path
+    (OpenID Connect Discovery 1.0, section 4). rauthy and Authentik give an
+    issuer that ends in ``/``; without this rule the gate asked for
+    ``.../auth/v1//.well-known/openid-configuration`` and rauthy answered 404
+    (issue #13). The issuer itself is never changed -- see
+    :func:`fetch_discovery_document`.
+    """
+
+    return issuer_url.rstrip("/") + "/.well-known/openid-configuration"
+
+
 async def fetch_discovery_document(
     issuer_url: str, *, timeout: float = 10.0
 ) -> dict[str, Any]:
-    """Fetch and parse ``{issuer_url}/.well-known/openid-configuration``.
+    """Fetch, parse and check the discovery document of ``issuer_url``.
 
-    Fetched fresh on every call -- no caching (research.md's "no JWKS
-    caching" reasoning applies identically here: login is infrequent
-    enough that the extra round-trip is negligible, and an unstated cache
-    would otherwise mask the provider changing its own endpoints). Any
-    failure -- timeout, connection error, non-2xx status, or a body that
-    isn't valid JSON -- raises :class:`OIDCDiscoveryError`; there is no
-    partial-success or fallback path.
+    The ``issuer`` of the document must equal ``issuer_url`` exactly, as
+    the operator wrote it (Discovery 1.0, section 4.3; ADR-007). The gate
+    then compares the ``iss`` of each ID token with that same value, so a
+    ``/`` at the end matters: copy the issuer from the document.
+
+    Fetched fresh on every call -- no caching. A login is rare enough that
+    the extra round trip costs nothing, and a cache would hide a change of
+    the endpoints at the provider. Any failure -- timeout, connection error,
+    non-2xx status, a body that isn't a JSON object, or a check that fails
+    -- raises :class:`OIDCDiscoveryError`; there is no fallback path.
     """
 
-    url = f"{issuer_url}/.well-known/openid-configuration"
+    url = discovery_url(issuer_url)
     try:
         async with (
             aiohttp.ClientSession() as session,
-            session.get(url, timeout=aiohttp.ClientTimeout(total=timeout)) as response,
+            session.get(
+                url,
+                timeout=aiohttp.ClientTimeout(total=timeout),
+                allow_redirects=False,
+            ) as response,
         ):
             response.raise_for_status()
-            return await response.json(content_type=None)
+            document = await response.json(content_type=None)
     except (TimeoutError, aiohttp.ClientError, ValueError) as exc:
         raise OIDCDiscoveryError(
             f"failed to fetch discovery document from {url}: {exc}"
         ) from exc
+    if not isinstance(document, dict):
+        raise OIDCDiscoveryError(f"the discovery document at {url} is not an object")
+    if document.get("issuer") != issuer_url:
+        raise OIDCDiscoveryError(
+            f"the discovery document at {url} names the issuer "
+            f"{document.get('issuer')!r}, not the configured issuer "
+            f"{issuer_url!r}; set the issuer to the exact value of the document"
+        )
+    return document
 
 
 @dataclass(frozen=True)
@@ -264,7 +296,82 @@ class OIDCTokenVerificationError(Exception):
     mirroring :class:`OIDCDiscoveryError`'s shape (FR-007). A forged or
     replayed callback MUST NOT succeed -- there is no partial-trust
     outcome here, only "verified" or this exception.
+
+    ``reason`` is a short text for the log line. It never holds the token
+    or a part of it.
     """
+
+    def __init__(self, reason: str) -> None:
+        super().__init__(reason)
+        self.reason = reason
+
+
+#: The JWS algorithms the gate accepts -- asymmetric only (ADR-007). The key
+#: sets the algorithm (:func:`select_signing_key`), never the token header.
+ALLOWED_ALGORITHMS = frozenset({"RS256", "RS384", "RS512", "PS256", "ES256", "EdDSA"})
+
+#: The algorithm of a JWK that has no ``alg``, by its key type and curve.
+_DEFAULT_ALGORITHMS = {
+    ("RSA", None): "RS256",
+    ("EC", "P-256"): "ES256",
+    ("OKP", "Ed25519"): "EdDSA",
+}
+
+
+def read_token_header(token: str) -> dict[str, Any]:
+    """The JOSE header of a compact JWS, read with no check of the signature.
+
+    Raises :class:`OIDCTokenVerificationError` for a value that is not a
+    compact JWS with a JSON object as its header.
+    """
+
+    parts = token.split(".")
+    if len(parts) != 3:
+        raise OIDCTokenVerificationError("malformed token")
+    try:
+        padded = parts[0] + "=" * (-len(parts[0]) % 4)
+        header = json.loads(base64.urlsafe_b64decode(padded.encode("ascii")))
+    except (ValueError, UnicodeError) as exc:
+        raise OIDCTokenVerificationError("malformed token") from exc
+    if not isinstance(header, dict):
+        raise OIDCTokenVerificationError("malformed token")
+    return header
+
+
+def _key_algorithm(key: Any) -> str | None:
+    """The algorithm of a JWK: its ``alg``, else the default of its type."""
+
+    alg = key.get("alg")
+    if isinstance(alg, str):
+        return alg
+    curve = key.get("crv")
+    return _DEFAULT_ALGORITHMS.get(
+        (key.key_type, curve if key.key_type != "RSA" else None)
+    )
+
+
+def select_signing_key(header: dict[str, Any], key_set: KeySet) -> tuple[Any, str]:
+    """The key of the JWKS that checks a token with ``header``, and its algorithm.
+
+    The key with the ``kid`` of the header sets the algorithm (ADR-007).
+    The ``alg`` of the header must name the same algorithm, and it must be
+    in :data:`ALLOWED_ALGORITHMS`. A header with no ``kid`` matches only a
+    key set that holds exactly one signing key.
+    """
+
+    kid = header.get("kid")
+    candidates = [key for key in key_set.keys if key.get("use", "sig") == "sig"]
+    if kid is not None:
+        candidates = [key for key in candidates if key.kid == kid]
+    if len(candidates) != 1:
+        raise OIDCTokenVerificationError("unknown key")
+    key = candidates[0]
+    algorithm = _key_algorithm(key)
+    if algorithm not in ALLOWED_ALGORITHMS:
+        raise OIDCTokenVerificationError(f"key algorithm {algorithm} is not allowed")
+    if header.get("alg") != algorithm:
+        raise OIDCTokenVerificationError("the token algorithm is not the key algorithm")
+    return key, algorithm
 
 
 async def _fetch_jwks(jwks_uri: str, *, timeout: float) -> KeySet:
@@ -294,19 +401,26 @@ async def verify_id_token(
     expected_nonce: str,
     timeout: float = 10.0,
 ) -> dict[str, Any]:
-    """Verify ``id_token``'s RS256 signature against the provider's JWKS
-    (fetched fresh -- no caching, research.md) and its `iss`/`aud`/`nonce`/
-    `exp` claims. Returns the verified claims on success; raises
-    :class:`OIDCTokenVerificationError` for any failure.
+    """Verify ``id_token``'s signature against the provider's JWKS (fetched
+    fresh -- a login is rare) and its ``iss``/``aud``/``nonce``/``exp``
+    claims. The key with the ``kid`` of the token sets the algorithm
+    (:func:`select_signing_key`). Returns the verified claims on success;
+    raises :class:`OIDCTokenVerificationError` for any failure.
     """
 
     from joserfc import errors as jose_errors  # deferred -- module docstring (issue #5)
     from joserfc import jwt
 
+    header = read_token_header(id_token)
     key_set = await _fetch_jwks(discovery["jwks_uri"], timeout=timeout)
+    key, algorithm = select_signing_key(header, key_set)
 
     try:
-        token = jwt.decode(id_token, key_set, algorithms=["RS256"])
+        with warnings.catch_warnings():
+            # joserfc warns that RFC 9864 renames EdDSA to Ed25519. rauthy
+            # 0.37.2 still writes EdDSA, and the key already fixed the curve.
+            warnings.simplefilter("ignore", jose_errors.SecurityWarning)
+            token = jwt.decode(id_token, key, algorithms=[algorithm])
         claims_registry = jwt.JWTClaimsRegistry(
             iss={"essential": True, "value": config.issuer_url},
             aud={"essential": True, "value": config.client_id},
@@ -511,6 +625,7 @@ def build_oidc_routes(
 
 
 __all__ = [
+    "ALLOWED_ALGORITHMS",
     "OIDC_CALLBACK_PATH",
     "OIDC_START_PATH",
     "AuthorizationRequestStore",
@@ -520,7 +635,10 @@ __all__ = [
     "OIDCTokenVerificationError",
     "build_authorization_url",
     "build_oidc_routes",
+    "discovery_url",
     "fetch_discovery_document",
+    "read_token_header",
     "resolve_oidc_config",
+    "select_signing_key",
     "verify_id_token",
 ]
