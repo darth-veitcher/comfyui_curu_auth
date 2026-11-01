@@ -28,12 +28,14 @@ from __future__ import annotations
 
 import base64
 import hashlib
+import json
 import logging
 import secrets
 import time
+import warnings
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, NoReturn
-from urllib.parse import urlencode
+from urllib.parse import urlencode, urlsplit
 
 import aiohttp
 from aiohttp import web
@@ -93,16 +95,80 @@ class OIDCDiscoveryError(Exception):
 
 
 @dataclass(frozen=True)
+class LoginAllowlist:
+    """Who may get a session from the OIDC login (ADR-007).
+
+    A person is allowed when ``allow_any`` is true, when the ``sub`` of the
+    ID token is in ``subjects``, when a verified ``email`` is in ``emails``,
+    or when the ``hd`` claim equals ``domain``. ``emails`` and ``domain``
+    hold small letters only; :func:`resolve_oidc_config` makes them so.
+
+    The empty allowlist (the default) allows nobody -- the safe default for
+    a security type. ``allow_any`` is the explicit decision to let the
+    provider decide, for example an Authentik application with a group
+    binding.
+    """
+
+    subjects: frozenset[str] = frozenset()
+    emails: frozenset[str] = frozenset()
+    domain: str | None = None
+    allow_any: bool = False
+
+    @property
+    def is_empty(self) -> bool:
+        return not (self.allow_any or self.subjects or self.emails or self.domain)
+
+    def permits(self, claims: dict[str, Any]) -> bool:
+        if self.allow_any:
+            return True
+        if claims.get("sub") in self.subjects:
+            return True
+        email = claims.get("email")
+        verified = claims.get("email_verified") in (True, "true")
+        if verified and isinstance(email, str) and email.lower() in self.emails:
+            return True
+        domain = claims.get("hd")
+        return (
+            self.domain is not None
+            and isinstance(domain, str)
+            and domain.lower() == self.domain
+        )
+
+
+#: The scopes the login asks for when the operator sets none.
+DEFAULT_SCOPES = ("openid", "profile", "email")
+
+
+@dataclass(frozen=True)
 class OIDCConfig:
     """Fully-resolved OIDC provider configuration -- either every field is
     populated, or :func:`resolve_oidc_config` returns ``None`` entirely
     (FR-009). Never constructed partially filled.
+
+    ``allowlist`` defaults to the empty allowlist, which allows nobody.
     """
 
     issuer_url: str
     client_id: str
     client_secret: str
     redirect_uri: str
+    allowlist: LoginAllowlist = LoginAllowlist()
+    scopes: tuple[str, ...] = DEFAULT_SCOPES
+
+
+class OIDCConfigError(Exception):
+    """The four settings of the login are set, but the setup is not safe.
+
+    ``__init__.py`` writes this as an error and keeps the OIDC login off. It
+    never lets it escape: ComfyUI would then skip the node, and the gate
+    would be off (ADR-007).
+    """
+
+
+def _split(value: str | None) -> list[str]:
+    """The items of a setting, with a comma or a space between them."""
+
+    return [item for item in (value or "").replace(",", " ").split() if item]
 
 
 def resolve_oidc_config(
@@ -111,54 +177,167 @@ def resolve_oidc_config(
     client_id: str | None,
     client_secret: str | None,
     redirect_uri: str | None,
+    allowed_subjects: str | None = None,
+    allowed_emails: str | None = None,
+    allowed_domain: str | None = None,
+    allow_any_user: str | None = None,
+    scopes: str | None = None,
 ) -> OIDCConfig | None:
-    """``OIDCConfig`` if all four values are real, non-empty strings;
-    otherwise ``None`` -- never a partially-filled config (FR-009).
+    """``OIDCConfig`` if all four values are real, non-empty strings and an
+    allowlist is set; ``None`` if any of the four is missing -- never a
+    partially-filled config (FR-009 of spec 002).
 
-    Mirrors :func:`gate.resolve_credential`'s own handling: ``__init__.py``
-    calls this with ``os.environ.get(...)`` for each of the four
-    ``COMFYUI_CURU_AUTH_OIDC_*`` variables, and ``os.environ.get`` returns
-    ``""`` for a declared-but-empty variable, not ``None`` -- both are
-    treated as "not supplied", exactly like ``resolve_credential`` already
-    treats an empty credential as absent.
+    With all four set but an empty allowlist and ``allow_any_user`` not
+    ``true``, raises :class:`OIDCConfigError` (ADR-007): the login must not
+    give a session to each account at the provider by accident.
+
+    ``__init__.py`` passes ``os.environ.get(...)`` for each value, and an
+    empty variable counts as not set. ``allow_any_user`` is true only for
+    the word ``true``, with any capital letters; any other value is false,
+    so a typing error fails closed.
+
+    ``scopes`` is a list with a comma or a space between the items. The
+    result always starts with ``openid``, and has no item twice. With no
+    value, it is :data:`DEFAULT_SCOPES`.
     """
 
-    if issuer_url and client_id and client_secret and redirect_uri:
-        return OIDCConfig(
-            issuer_url=issuer_url,
-            client_id=client_id,
-            client_secret=client_secret,
-            redirect_uri=redirect_uri,
+    if not (issuer_url and client_id and client_secret and redirect_uri):
+        return None
+    if not is_safe_url(issuer_url):
+        # The discovery document comes from the issuer and names the keys, so
+        # plain http to another host would let the network swap the keys.
+        raise OIDCConfigError(
+            "OIDC login is off: COMFYUI_CURU_AUTH_OIDC_ISSUER_URL must use https "
+            "(plain http is allowed only on localhost, 127.0.0.1 and ::1)"
         )
-    return None
+    domain = (allowed_domain or "").strip().lower()
+    allowlist = LoginAllowlist(
+        subjects=frozenset(_split(allowed_subjects)),
+        emails=frozenset(email.lower() for email in _split(allowed_emails)),
+        domain=domain or None,
+        allow_any=(allow_any_user or "").strip().lower() == "true",
+    )
+    if allowlist.is_empty:
+        raise OIDCConfigError(
+            "OIDC login is off: set COMFYUI_CURU_AUTH_OIDC_ALLOWED_SUBJECTS, "
+            "COMFYUI_CURU_AUTH_OIDC_ALLOWED_EMAILS or "
+            "COMFYUI_CURU_AUTH_OIDC_ALLOWED_DOMAIN, or set "
+            "COMFYUI_CURU_AUTH_OIDC_ALLOW_ANY_USER=true to let the provider "
+            "decide who can log in"
+        )
+    return OIDCConfig(
+        issuer_url=issuer_url,
+        client_id=client_id,
+        client_secret=client_secret,
+        redirect_uri=redirect_uri,
+        allowlist=allowlist,
+        scopes=_scopes(scopes),
+    )
+
+
+def _scopes(setting: str | None) -> tuple[str, ...]:
+    """The scopes of ``setting``, with ``openid`` first and no item twice."""
+
+    items = _split(setting)
+    if not items:
+        return DEFAULT_SCOPES
+    return tuple(dict.fromkeys(["openid", *items]))
+
+
+def discovery_url(issuer_url: str) -> str:
+    """The URL of the discovery document of ``issuer_url``.
+
+    Removes each ``/`` at the end of the issuer before it adds the path
+    (OpenID Connect Discovery 1.0, section 4). rauthy and Authentik give an
+    issuer that ends in ``/``; without this rule the gate asked for
+    ``.../auth/v1//.well-known/openid-configuration`` and rauthy answered 404
+    (issue #13). The issuer itself is never changed -- see
+    :func:`fetch_discovery_document`.
+    """
+
+    return issuer_url.rstrip("/") + "/.well-known/openid-configuration"
 
 
 async def fetch_discovery_document(
     issuer_url: str, *, timeout: float = 10.0
 ) -> dict[str, Any]:
-    """Fetch and parse ``{issuer_url}/.well-known/openid-configuration``.
+    """Fetch, parse and check the discovery document of ``issuer_url``.
 
-    Fetched fresh on every call -- no caching (research.md's "no JWKS
-    caching" reasoning applies identically here: login is infrequent
-    enough that the extra round-trip is negligible, and an unstated cache
-    would otherwise mask the provider changing its own endpoints). Any
-    failure -- timeout, connection error, non-2xx status, or a body that
-    isn't valid JSON -- raises :class:`OIDCDiscoveryError`; there is no
-    partial-success or fallback path.
+    The ``issuer`` of the document must equal ``issuer_url`` exactly, as
+    the operator wrote it (Discovery 1.0, section 4.3; ADR-007). The gate
+    then compares the ``iss`` of each ID token with that same value, so a
+    ``/`` at the end matters: copy the issuer from the document.
+
+    Fetched fresh on every call -- no caching. A login is rare enough that
+    the extra round trip costs nothing, and a cache would hide a change of
+    the endpoints at the provider. Any failure -- timeout, connection error,
+    non-2xx status, a body that isn't a JSON object, or a check that fails
+    -- raises :class:`OIDCDiscoveryError`; there is no fallback path.
     """
 
-    url = f"{issuer_url}/.well-known/openid-configuration"
+    url = discovery_url(issuer_url)
     try:
         async with (
             aiohttp.ClientSession() as session,
-            session.get(url, timeout=aiohttp.ClientTimeout(total=timeout)) as response,
+            session.get(
+                url,
+                timeout=aiohttp.ClientTimeout(total=timeout),
+                allow_redirects=False,
+            ) as response,
         ):
-            response.raise_for_status()
-            return await response.json(content_type=None)
+            _require_ok(response)
+            document = await response.json(content_type=None)
     except (TimeoutError, aiohttp.ClientError, ValueError) as exc:
         raise OIDCDiscoveryError(
             f"failed to fetch discovery document from {url}: {exc}"
         ) from exc
+    if not isinstance(document, dict):
+        raise OIDCDiscoveryError(f"the discovery document at {url} is not an object")
+    if document.get("issuer") != issuer_url:
+        raise OIDCDiscoveryError(
+            f"the discovery document at {url} names the issuer "
+            f"{document.get('issuer')!r}, not the configured issuer "
+            f"{issuer_url!r}; set the issuer to the exact value of the document"
+        )
+    for endpoint in _DISCOVERY_ENDPOINTS:
+        _require_safe_url(document, endpoint)
+    return document
+
+
+#: The endpoints of a discovery document that the gate uses (ADR-007).
+_DISCOVERY_ENDPOINTS = ("authorization_endpoint", "token_endpoint", "jwks_uri")
+
+#: The hosts where plain ``http`` is allowed: a provider on this computer.
+_LOOPBACK_HOSTS = frozenset({"localhost", "127.0.0.1", "::1"})
+
+
+def is_safe_url(url: str) -> bool:
+    """Whether ``url`` uses ``https``, or plain ``http`` on a loopback host."""
+
+    parts = urlsplit(url)
+    if parts.scheme == "https" and parts.hostname:
+        return True
+    return parts.scheme == "http" and parts.hostname in _LOOPBACK_HOSTS
+
+
+def _require_safe_url(document: dict[str, Any], endpoint: str) -> None:
+    """Refuse an endpoint that is absent, or plain ``http`` off loopback.
+
+    A person's browser goes to ``authorization_endpoint``, the client secret
+    goes to ``token_endpoint``, and the keys come from ``jwks_uri``. Over
+    plain ``http`` to another computer, each one is open to a change on the
+    network (ADR-007; curu-memory does the same in ``_safe_url``).
+    """
+
+    url = document.get(endpoint)
+    if not isinstance(url, str) or not url:
+        raise OIDCDiscoveryError(f"the discovery document has no {endpoint}")
+    if is_safe_url(url):
+        return
+    raise OIDCDiscoveryError(
+        f"the {endpoint} of the discovery document must use https "
+        "(plain http is allowed only on localhost, 127.0.0.1 and ::1)"
+    )
 
 
 @dataclass(frozen=True)
@@ -235,12 +414,11 @@ def build_authorization_url(
     config: OIDCConfig,
     discovery: dict[str, Any],
     store: AuthorizationRequestStore,
-    *,
-    scope: str = "openid profile email",
 ) -> str:
     """Build the redirect URL to the identity provider's authorization
     endpoint, recording a matching :class:`InFlightAuthRequest` in
-    ``store`` keyed by the `state` it generates.
+    ``store`` keyed by the `state` it generates. The scope is
+    ``config.scopes`` (spec 003).
     """
 
     in_flight = store.create()
@@ -248,7 +426,7 @@ def build_authorization_url(
         "client_id": config.client_id,
         "redirect_uri": config.redirect_uri,
         "response_type": "code",
-        "scope": scope,
+        "scope": " ".join(config.scopes),
         "state": in_flight.state,
         "nonce": in_flight.nonce,
         "code_challenge": _pkce_challenge(in_flight.pkce_verifier),
@@ -264,26 +442,147 @@ class OIDCTokenVerificationError(Exception):
     mirroring :class:`OIDCDiscoveryError`'s shape (FR-007). A forged or
     replayed callback MUST NOT succeed -- there is no partial-trust
     outcome here, only "verified" or this exception.
+
+    ``reason`` is a short text for the log line. It never holds the token
+    or a part of it.
     """
+
+    def __init__(self, reason: str) -> None:
+        super().__init__(reason)
+        self.reason = reason
+
+
+#: The JWS algorithms the gate accepts -- asymmetric only (ADR-007). The key
+#: sets the algorithm (:func:`select_signing_key`), never the token header.
+ALLOWED_ALGORITHMS = frozenset({"RS256", "RS384", "RS512", "PS256", "ES256", "EdDSA"})
+
+_HMAC_ALGORITHMS = frozenset({"HS256", "HS384", "HS512"})
+
+#: The clock difference, in seconds, allowed for ``exp``, ``iat`` and ``nbf``
+#: of an ID token (ADR-007).
+CLOCK_LEEWAY_SECONDS = 60
+
+#: The algorithm of a JWK that has no ``alg``, by its key type and curve.
+_DEFAULT_ALGORITHMS = {
+    ("RSA", None): "RS256",
+    ("EC", "P-256"): "ES256",
+    ("OKP", "Ed25519"): "EdDSA",
+}
+
+
+def read_token_header(token: str) -> dict[str, Any]:
+    """The JOSE header of a compact JWS, read with no check of the signature.
+
+    Raises :class:`OIDCTokenVerificationError` for a value that is not a
+    compact JWS with a JSON object as its header.
+    """
+
+    parts = token.split(".")
+    if len(parts) != 3:
+        raise OIDCTokenVerificationError("malformed token")
+    try:
+        padded = parts[0] + "=" * (-len(parts[0]) % 4)
+        header = json.loads(base64.urlsafe_b64decode(padded.encode("ascii")))
+    except (ValueError, UnicodeError) as exc:
+        raise OIDCTokenVerificationError("malformed token") from exc
+    if not isinstance(header, dict):
+        raise OIDCTokenVerificationError("malformed token")
+    return header
+
+
+def check_token_algorithm(header: dict[str, Any]) -> str:
+    """The ``alg`` of ``header``, if the gate can accept it at all.
+
+    Runs before the gate reads the JWKS, so a token with ``none`` or an
+    HMAC algorithm never causes a fetch (ADR-007). An HMAC check uses a
+    shared secret, and a gate that accepted one could be tricked into using
+    the public key of the provider as that secret (key confusion).
+    """
+
+    alg = header.get("alg")
+    if not isinstance(alg, str):
+        raise OIDCTokenVerificationError("malformed token")
+    # The reason names the algorithm only when it is one of the fixed names
+    # below: the value comes from the token, and a reason holds no token data.
+    if alg.upper().startswith("HS"):
+        name = alg if alg in _HMAC_ALGORITHMS else "an HMAC algorithm"
+        raise OIDCTokenVerificationError(
+            f"algorithm {name} is not allowed: the token is signed with a shared "
+            "secret. An Authentik provider with no signing key does this; select "
+            "a signing key on the provider"
+        )
+    if alg not in ALLOWED_ALGORITHMS:
+        raise OIDCTokenVerificationError("the algorithm of the token is not allowed")
+    return alg
+
+
+def _key_algorithm(key: Any) -> str | None:
+    """The algorithm of a JWK: its ``alg``, else the default of its type."""
+
+    alg = key.get("alg")
+    if isinstance(alg, str):
+        return alg
+    curve = key.get("crv")
+    return _DEFAULT_ALGORITHMS.get(
+        (key.key_type, curve if key.key_type != "RSA" else None)
+    )
+
+
+def select_signing_key(header: dict[str, Any], key_set: KeySet) -> tuple[Any, str]:
+    """The key of the JWKS that checks a token with ``header``, and its algorithm.
+
+    The key with the ``kid`` of the header sets the algorithm (ADR-007).
+    The ``alg`` of the header must name the same algorithm, and it must be
+    in :data:`ALLOWED_ALGORITHMS`. A header with no ``kid`` matches only a
+    key set that holds exactly one signing key.
+    """
+
+    kid = header.get("kid")
+    candidates = [key for key in key_set.keys if key.get("use", "sig") == "sig"]
+    if kid is not None:
+        candidates = [key for key in candidates if key.kid == kid]
+    if len(candidates) != 1:
+        raise OIDCTokenVerificationError("unknown key")
+    key = candidates[0]
+    algorithm = _key_algorithm(key)
+    if algorithm not in ALLOWED_ALGORITHMS:
+        raise OIDCTokenVerificationError(f"key algorithm {algorithm} is not allowed")
+    if header.get("alg") != algorithm:
+        raise OIDCTokenVerificationError("the token algorithm is not the key algorithm")
+    return key, algorithm
 
 
 async def _fetch_jwks(jwks_uri: str, *, timeout: float) -> KeySet:
+    from joserfc.errors import JoseError
     from joserfc.jwk import KeySet  # deferred -- see module docstring (issue #5)
 
     try:
         async with (
             aiohttp.ClientSession() as session,
             session.get(
-                jwks_uri, timeout=aiohttp.ClientTimeout(total=timeout)
+                jwks_uri,
+                timeout=aiohttp.ClientTimeout(total=timeout),
+                # A redirect could move the keys to plain http (ADR-007).
+                allow_redirects=False,
             ) as response,
         ):
-            response.raise_for_status()
+            _require_ok(response)
             jwks_data = await response.json(content_type=None)
     except (TimeoutError, aiohttp.ClientError, ValueError) as exc:
-        raise OIDCTokenVerificationError(
-            f"failed to fetch JWKS from {jwks_uri}: {exc}"
-        ) from exc
-    return KeySet.import_key_set(jwks_data)
+        raise OIDCTokenVerificationError("failed to fetch the JWKS") from exc
+    try:
+        return KeySet.import_key_set(jwks_data)
+    except (JoseError, TypeError, KeyError, ValueError, AttributeError) as exc:
+        raise OIDCTokenVerificationError("the JWKS is not a valid key set") from exc
+
+
+def _require_ok(response: aiohttp.ClientResponse) -> None:
+    """Raise for any answer that is not 2xx -- also a redirect, which the
+    gate never follows."""
+
+    response.raise_for_status()
+    if response.status >= 300:
+        raise aiohttp.ClientError(f"HTTP {response.status}")
 
 
 async def verify_id_token(
@@ -294,29 +593,49 @@ async def verify_id_token(
     expected_nonce: str,
     timeout: float = 10.0,
 ) -> dict[str, Any]:
-    """Verify ``id_token``'s RS256 signature against the provider's JWKS
-    (fetched fresh -- no caching, research.md) and its `iss`/`aud`/`nonce`/
-    `exp` claims. Returns the verified claims on success; raises
-    :class:`OIDCTokenVerificationError` for any failure.
+    """Verify ``id_token``'s signature against the provider's JWKS (fetched
+    fresh -- a login is rare) and its ``iss``/``aud``/``nonce``/``exp``
+    claims. The key with the ``kid`` of the token sets the algorithm
+    (:func:`select_signing_key`). Returns the verified claims on success;
+    raises :class:`OIDCTokenVerificationError` for any failure.
     """
 
     from joserfc import errors as jose_errors  # deferred -- module docstring (issue #5)
     from joserfc import jwt
 
+    header = read_token_header(id_token)
+    check_token_algorithm(header)
     key_set = await _fetch_jwks(discovery["jwks_uri"], timeout=timeout)
+    key, algorithm = select_signing_key(header, key_set)
 
     try:
-        token = jwt.decode(id_token, key_set, algorithms=["RS256"])
+        with warnings.catch_warnings():
+            # joserfc warns that RFC 9864 renames EdDSA to Ed25519. rauthy
+            # 0.37.2 still writes EdDSA, and the key already fixed the curve.
+            warnings.simplefilter("ignore", jose_errors.SecurityWarning)
+            token = jwt.decode(id_token, key, algorithms=[algorithm])
         claims_registry = jwt.JWTClaimsRegistry(
+            leeway=CLOCK_LEEWAY_SECONDS,
             iss={"essential": True, "value": config.issuer_url},
             aud={"essential": True, "value": config.client_id},
             nonce={"essential": True, "value": expected_nonce},
+            exp={"essential": True},
+            iat={"essential": True},
         )
         claims_registry.validate(token.claims)
     except jose_errors.JoseError as exc:
         raise OIDCTokenVerificationError(
             f"ID token verification failed: {exc}"
         ) from exc
+
+    # OpenID Connect Core 1.0, section 3.1.3.7: with more than one audience,
+    # azp names the client the token was issued to. When azp is present at
+    # all, it must be this client.
+    audience = token.claims.get("aud")
+    azp = token.claims.get("azp")
+    several = isinstance(audience, list) and len(audience) > 1
+    if (several or azp is not None) and azp != config.client_id:
+        raise OIDCTokenVerificationError("the azp of the ID token is not this client")
 
     return token.claims
 
@@ -356,9 +675,11 @@ async def _exchange_code_for_token(
                 discovery["token_endpoint"],
                 data=data,
                 timeout=aiohttp.ClientTimeout(total=timeout),
+                # A 307 or 308 would send the client secret to the new target.
+                allow_redirects=False,
             ) as response,
         ):
-            response.raise_for_status()
+            _require_ok(response)
             return await response.json(content_type=None)
     except (TimeoutError, aiohttp.ClientError, ValueError, KeyError) as exc:
         raise OIDCTokenVerificationError(f"token exchange failed: {exc}") from exc
@@ -424,20 +745,29 @@ def build_oidc_routes(
         try:
             discovery = await fetch_discovery_document(config.issuer_url)
         except OIDCDiscoveryError as exc:
+            # A setup or provider fault, not an authentication failure: a
+            # different text, so fail2ban and crowdsec do not ban for it. The
+            # message names both issuers when they differ (ADR-007).
+            _logger.error("comfyui_curu_auth: OIDC login unavailable: %s", exc)
             raise web.HTTPServiceUnavailable(
-                text="identity provider unreachable"
+                text="identity provider unreachable; see the ComfyUI log"
             ) from exc
         raise web.HTTPFound(build_authorization_url(config, discovery, store))
 
-    def _reject_callback(key: str, *, cause: BaseException | None = None) -> NoReturn:
+    def _reject_callback(
+        key: str, *, reason: str = "", cause: BaseException | None = None
+    ) -> NoReturn:
         # Same RateLimiter/logger the Bearer-header and login-form paths
         # already use (T036/T037, US3) -- not a parallel mechanism.
-        # fail2ban/crowdsec key off this one stable, greppable format.
+        # fail2ban/crowdsec key off the stable prefix "authentication
+        # failure from <IP>"; the reason in the parentheses is for the
+        # operator, and never holds a token or a claim value.
         if rate_limiter is not None:
             rate_limiter.record_failure(key)
         _logger.warning(
-            "comfyui_curu_auth: authentication failure from %s (oidc callback)",
+            "comfyui_curu_auth: authentication failure from %s (oidc callback%s)",
             key,
+            f": {reason}" if reason else "",
         )
         raise web.HTTPUnauthorized(text="OIDC login failed") from cause
 
@@ -485,15 +815,22 @@ def build_oidc_routes(
             token_response = await _exchange_code_for_token(
                 config, discovery, code, code_verifier=in_flight.pkce_verifier
             )
-            id_token = token_response["id_token"]
-            await verify_id_token(
+            id_token = token_response.get("id_token")
+            if not isinstance(id_token, str):
+                _reject_callback(key, reason="no id_token in the token response")
+            claims = await verify_id_token(
                 id_token,
                 config=config,
                 discovery=discovery,
                 expected_nonce=in_flight.nonce,
             )
-        except (OIDCDiscoveryError, OIDCTokenVerificationError, KeyError) as exc:
-            _reject_callback(key, cause=exc)
+        except OIDCTokenVerificationError as exc:
+            _reject_callback(key, reason=exc.reason, cause=exc)
+        except OIDCDiscoveryError as exc:
+            _reject_callback(key, reason="discovery document refused", cause=exc)
+
+        if not config.allowlist.permits(claims):
+            _reject_callback(key, reason="the person is not on the allowlist")
 
         if rate_limiter is not None:
             rate_limiter.record_success(key)
@@ -511,16 +848,26 @@ def build_oidc_routes(
 
 
 __all__ = [
+    "ALLOWED_ALGORITHMS",
+    "CLOCK_LEEWAY_SECONDS",
+    "DEFAULT_SCOPES",
     "OIDC_CALLBACK_PATH",
     "OIDC_START_PATH",
     "AuthorizationRequestStore",
     "InFlightAuthRequest",
+    "LoginAllowlist",
     "OIDCConfig",
+    "OIDCConfigError",
     "OIDCDiscoveryError",
     "OIDCTokenVerificationError",
     "build_authorization_url",
     "build_oidc_routes",
+    "check_token_algorithm",
+    "discovery_url",
     "fetch_discovery_document",
+    "is_safe_url",
+    "read_token_header",
     "resolve_oidc_config",
+    "select_signing_key",
     "verify_id_token",
 ]

@@ -1,7 +1,7 @@
 # Roadmap — Strategy
 
 **Project:** comfyui_curu_auth
-**Last reviewed:** 2026-07-23
+**Last reviewed:** 2026-11-01
 
 ---
 
@@ -20,7 +20,7 @@
 > One paragraph: what problem class are we addressing this year? What does
 > "winning" look like at year-end?
 
-By year-end, this is the default answer to "how do I put a password on ComfyUI" for self-hosted and rented-GPU users — zero-config bearer-token install, every route covered including websockets, fail2ban/crowdsec ready for public-IP deployments. From there, we expand *who* gets to authenticate: OIDC/OAuth for teams with an existing identity provider, and passkeys/WebAuthn for a passwordless, phishing-resistant flow — added as options alongside the credential model, not replacing its zero-config simplicity for solo/home users.
+By year-end, this is the default way to put a password on ComfyUI for self-hosted and rented-GPU users. It installs with no configuration, covers each route with the websocket, and works with fail2ban and crowdsec. Next, more people can log in: OIDC for teams with an identity provider, and passkeys for a passwordless login. Both are options next to the credential, which stays simple for one person at home.
 
 ---
 
@@ -30,9 +30,9 @@ The two-to-five concrete initiatives you've committed to delivering this quarter
 Each is materialised as an epic file under [`epics/`](./epics/) with its own
 success criteria, owned specs, and ADRs.
 
-- **[Initiative A]** — `epics/<slug>.md` — one-line outcome
-- **[Initiative B]** — `epics/<slug>.md` — one-line outcome
-- **[Initiative C]** — `epics/<slug>.md` — one-line outcome
+- **OIDC with real providers** — `epics/oidc-auth.md` — the OIDC login works with rauthy and Authentik (spec 003). Programs can send OIDC access tokens (spec 004).
+- **Passkeys** — `epics/passkey-auth.md` — a passwordless login. Not started.
+- **Browser end-to-end tests** — `epics/browser-e2e.md` — started: the rauthy tier of spec 003 adds the first Playwright test.
 
 For the live rollup (specs per epic, % tasks complete, last-commit age):
 
@@ -44,9 +44,8 @@ beacon epic list --detailed
 
 ## Sequencing and dependencies
 
-- Initiative A blocks B (B depends on the auth foundation A delivers).
-- Initiative C is independent and can ship in parallel.
-- [...]
+- Spec 004 (access tokens on the Bearer path) needs the issuer and key code of spec 003, so it starts after spec 003 merges.
+- Passkeys are independent of OIDC.
 
 ---
 
@@ -55,8 +54,8 @@ beacon epic list --detailed
 What you're explicitly **not** doing, with one-line rationale each. Prevents
 opportunistic scope creep and gives a paper trail when priorities shift.
 
-- [Feature X] — deferred to Q3 because [reason]
-- [Integration Y] — out of scope; team Z owns it
+- Roles or separate accounts — the gate stays one boundary.
+- More than one OIDC provider at a time.
 
 ---
 

@@ -18,6 +18,9 @@ dev = [
     "ruff>=0.6",
     "ty>=0.0.1a1",
 ]
+live = [
+    "playwright>=1.50",
+]
 
 # This package is loaded directly by ComfyUI as a raw custom_nodes/ directory --
 # it is never `pip install`ed or built into a wheel. `package = false` tells uv
@@ -52,6 +55,14 @@ commit_parser = "conventional"
 # they use depends on a build this project does not have.
 version_toml = ["pyproject.toml:project.version"]
 
+# `uv.lock` records this project's own version too. PSR stamps only the line
+# above, so without a re-lock every release left `uv.lock` one version behind
+# (1.0.1 shipped with a lock that said 1.0.0), and the next `uv run` dirtied the
+# tree. The build command re-locks after the stamp; `assets` puts the new lock
+# into the release commit (issue #16).
+build_command = "uv lock"
+assets = ["uv.lock"]
+
 # PSR's default commit message is a bare `{version}`, which a Conventional
 # Commits hook rejects. curu-infra hit exactly this cutting 0.62.0; inherited
 # rather than rediscovered.
@@ -71,8 +82,9 @@ minversion = "8.0"
 testpaths = ["tests"]
 markers = [
     "system: needs a full docker-compose harness (opt-in, not run by default)",
+    "rauthy: needs Docker, rauthy 0.37.2 and the `live` group (opt-in, not run by default)",
 ]
-addopts = "-ra --strict-markers --import-mode=importlib -m \"not system\""
+addopts = "-ra --strict-markers --import-mode=importlib -m \"not system and not rauthy\""
 pythonpath = ["."]
 asyncio_mode = "auto"
 

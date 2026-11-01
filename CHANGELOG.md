@@ -5,6 +5,39 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Breaking changes
+
+- The OIDC login now needs an allowlist. Set `COMFYUI_CURU_AUTH_OIDC_ALLOWED_SUBJECTS`,
+  `_ALLOWED_EMAILS` or `_ALLOWED_DOMAIN`, or `COMFYUI_CURU_AUTH_OIDC_ALLOW_ANY_USER=true`.
+  Without one, the OIDC login stays off and the console says so; the credential
+  gate stays on.
+
+### Added
+
+- `COMFYUI_CURU_AUTH_OIDC_ALLOWED_SUBJECTS`, `_ALLOWED_EMAILS` (verified emails
+  only), `_ALLOWED_DOMAIN` (the Google Workspace `hd` claim) and `_ALLOW_ANY_USER`.
+- `COMFYUI_CURU_AUTH_OIDC_SCOPES`, with `openid` always included.
+- `docs/oidc-providers.md`: a guide for rauthy, Authentik, Keycloak, Auth0, Okta,
+  Microsoft Entra ID, Google and Authelia.
+- A live test tier with rauthy 0.37.2 and a browser (`uv run --group live pytest -m rauthy`).
+
+### Fixed
+
+- The OIDC login works with an issuer that ends in `/`, as rauthy and Authentik
+  give it. The discovery URL no longer has `//`, and the issuer of the discovery
+  document must equal the configured issuer exactly.
+- ID tokens signed with RS384, RS512, PS256, ES256 and EdDSA are accepted. The
+  key with the `kid` of the token sets the algorithm.
+- `alg: none` and each HMAC algorithm are refused before the keys are read. An
+  HS256 refusal tells the operator to select a signing key on the Authentik provider.
+- Each endpoint of the discovery document must use `https`, or `http` on loopback.
+- An ID token must have `exp` and `iat`, and `azp` must be the client id when the
+  token has more than one audience. The clock leeway is 60 seconds.
+- A refused OIDC login names its reason in the log line, after `oidc callback:`.
+- A release now re-locks `uv.lock`, so it no longer falls one version behind.
+
 <!-- version list -->
 
 ## v1.0.1 (2026-10-16)
@@ -32,7 +65,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - Initial Release
 
-## [Unreleased]
+## Notes from before v1.0.0
 
 ### Added
 

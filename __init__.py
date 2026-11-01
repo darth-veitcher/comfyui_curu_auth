@@ -34,6 +34,7 @@ no-op.
 
 from __future__ import annotations
 
+import logging
 import os
 from pathlib import Path
 
@@ -56,6 +57,7 @@ try:
         OIDC_CALLBACK_PATH,
         OIDC_START_PATH,
         AuthorizationRequestStore,
+        OIDCConfigError,
         build_oidc_routes,
         resolve_oidc_config,
     )
@@ -105,12 +107,28 @@ if server is not None:
     # returns None unless all four are real, non-empty values -- a
     # partial set is treated identically to none at all, never a
     # half-configured state that starts anyway.
-    _oidc_config = resolve_oidc_config(
-        issuer_url=os.environ.get("COMFYUI_CURU_AUTH_OIDC_ISSUER_URL"),
-        client_id=os.environ.get("COMFYUI_CURU_AUTH_OIDC_CLIENT_ID"),
-        client_secret=os.environ.get("COMFYUI_CURU_AUTH_OIDC_CLIENT_SECRET"),
-        redirect_uri=os.environ.get("COMFYUI_CURU_AUTH_OIDC_REDIRECT_URI"),
-    )
+    #
+    # A full set with no allowlist is an error (spec 003, ADR-007), but it
+    # must not escape this module: ComfyUI would catch it and skip the
+    # node, and the gate below would never be installed -- open, the
+    # opposite of constitution III. So it is logged, and the OIDC login
+    # alone stays off.
+    try:
+        _oidc_config = resolve_oidc_config(
+            issuer_url=os.environ.get("COMFYUI_CURU_AUTH_OIDC_ISSUER_URL"),
+            client_id=os.environ.get("COMFYUI_CURU_AUTH_OIDC_CLIENT_ID"),
+            client_secret=os.environ.get("COMFYUI_CURU_AUTH_OIDC_CLIENT_SECRET"),
+            redirect_uri=os.environ.get("COMFYUI_CURU_AUTH_OIDC_REDIRECT_URI"),
+            allowed_subjects=os.environ.get("COMFYUI_CURU_AUTH_OIDC_ALLOWED_SUBJECTS"),
+            allowed_emails=os.environ.get("COMFYUI_CURU_AUTH_OIDC_ALLOWED_EMAILS"),
+            allowed_domain=os.environ.get("COMFYUI_CURU_AUTH_OIDC_ALLOWED_DOMAIN"),
+            allow_any_user=os.environ.get("COMFYUI_CURU_AUTH_OIDC_ALLOW_ANY_USER"),
+            scopes=os.environ.get("COMFYUI_CURU_AUTH_OIDC_SCOPES"),
+        )
+    except OIDCConfigError as _error:
+        logging.getLogger("comfyui_curu_auth").error("comfyui_curu_auth: %s", _error)
+        print(f"comfyui-curu-auth: {_error}", flush=True)
+        _oidc_config = None
     _public_paths = {LOGIN_PATH}
     if _oidc_config is not None:
         _public_paths |= {OIDC_START_PATH, OIDC_CALLBACK_PATH}
