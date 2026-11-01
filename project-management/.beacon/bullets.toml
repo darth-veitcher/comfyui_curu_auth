@@ -5,9 +5,3 @@
 # the bullet survives a fresh clone (`beacon doctor`'s active-bullet check then
 # works in CI) and no per-branch file is left behind on the trunk after a merge.
 # `git log -p` on this file is the audit trail of who started which bullet when.
-
-[bullets."docs/authentik-token-needs-a-scope"]
-title = "An Authentik program token needs a scope in its request"
-owner = "unknown"
-started = "2026-11-01T17:10:37+00:00"
-epic = "oidc-auth"
