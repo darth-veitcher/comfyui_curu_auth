@@ -155,7 +155,8 @@ A program can send an access token of the identity provider in the Bearer header
 |---|---|
 | Make one OAuth2 provider only for this gate. `aud` is its client id, so set the audience to that client id. | Provider documentation |
 | **Select a signing key on the provider.** Without one, the token is HS256, and the gate refuses it. | Provider documentation |
-| An access token has `typ` `JWT`, with `azp` and `scope`, so it passes. An ID token has no `scope`, and the gate refuses it. | Provider documentation |
+| An access token has `typ` `JWT` and `azp`. An ID token has no `scope`, and the gate refuses it. | Provider documentation |
+| **Ask for a scope in the token request**, for example `scope=openid`. The `scope` of the token holds only the scopes of the request. With no scope, the gate refuses the token as `ID token or no client id and scope`. | Provider documentation |
 | A program uses `client_credentials` with the client id, the user name of a service account, and an app password. | Provider documentation |
 | **Bind the application to a group**, and put the service account in it. | Provider documentation |
 | Set the access token validity of the provider to 1 hour or less, for example `minutes=10`. | Provider documentation |
