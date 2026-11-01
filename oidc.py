@@ -95,16 +95,80 @@ class OIDCDiscoveryError(Exception):
 
 
 @dataclass(frozen=True)
+class LoginAllowlist:
+    """Who may get a session from the OIDC login (ADR-007).
+
+    A person is allowed when ``allow_any`` is true, when the ``sub`` of the
+    ID token is in ``subjects``, when a verified ``email`` is in ``emails``,
+    or when the ``hd`` claim equals ``domain``. ``emails`` and ``domain``
+    hold small letters only; :func:`resolve_oidc_config` makes them so.
+
+    The empty allowlist (the default) allows nobody -- the safe default for
+    a security type. ``allow_any`` is the explicit decision to let the
+    provider decide, for example an Authentik application with a group
+    binding.
+    """
+
+    subjects: frozenset[str] = frozenset()
+    emails: frozenset[str] = frozenset()
+    domain: str | None = None
+    allow_any: bool = False
+
+    @property
+    def is_empty(self) -> bool:
+        return not (self.allow_any or self.subjects or self.emails or self.domain)
+
+    def permits(self, claims: dict[str, Any]) -> bool:
+        if self.allow_any:
+            return True
+        if claims.get("sub") in self.subjects:
+            return True
+        email = claims.get("email")
+        verified = claims.get("email_verified") in (True, "true")
+        if verified and isinstance(email, str) and email.lower() in self.emails:
+            return True
+        domain = claims.get("hd")
+        return (
+            self.domain is not None
+            and isinstance(domain, str)
+            and domain.lower() == self.domain
+        )
+
+
+#: The scopes the login asks for when the operator sets none.
+DEFAULT_SCOPES = ("openid", "profile", "email")
+
+
+@dataclass(frozen=True)
 class OIDCConfig:
     """Fully-resolved OIDC provider configuration -- either every field is
     populated, or :func:`resolve_oidc_config` returns ``None`` entirely
     (FR-009). Never constructed partially filled.
+
+    ``allowlist`` defaults to the empty allowlist, which allows nobody.
     """
 
     issuer_url: str
     client_id: str
     client_secret: str
     redirect_uri: str
+    allowlist: LoginAllowlist = LoginAllowlist()
+    scopes: tuple[str, ...] = DEFAULT_SCOPES
+
+
+class OIDCConfigError(Exception):
+    """The four settings of the login are set, but the setup is not safe.
+
+    ``__init__.py`` writes this as an error and keeps the OIDC login off. It
+    never lets it escape: ComfyUI would then skip the node, and the gate
+    would be off (ADR-007).
+    """
+
+
+def _split(value: str | None) -> list[str]:
+    """The items of a setting, with a comma or a space between them."""
+
+    return [item for item in (value or "").replace(",", " ").split() if item]
 
 
 def resolve_oidc_config(
@@ -113,26 +177,49 @@ def resolve_oidc_config(
     client_id: str | None,
     client_secret: str | None,
     redirect_uri: str | None,
+    allowed_subjects: str | None = None,
+    allowed_emails: str | None = None,
+    allowed_domain: str | None = None,
+    allow_any_user: str | None = None,
 ) -> OIDCConfig | None:
-    """``OIDCConfig`` if all four values are real, non-empty strings;
-    otherwise ``None`` -- never a partially-filled config (FR-009).
+    """``OIDCConfig`` if all four values are real, non-empty strings and an
+    allowlist is set; ``None`` if any of the four is missing -- never a
+    partially-filled config (FR-009 of spec 002).
 
-    Mirrors :func:`gate.resolve_credential`'s own handling: ``__init__.py``
-    calls this with ``os.environ.get(...)`` for each of the four
-    ``COMFYUI_CURU_AUTH_OIDC_*`` variables, and ``os.environ.get`` returns
-    ``""`` for a declared-but-empty variable, not ``None`` -- both are
-    treated as "not supplied", exactly like ``resolve_credential`` already
-    treats an empty credential as absent.
+    With all four set but an empty allowlist and ``allow_any_user`` not
+    ``true``, raises :class:`OIDCConfigError` (ADR-007): the login must not
+    give a session to each account at the provider by accident.
+
+    ``__init__.py`` passes ``os.environ.get(...)`` for each value, and an
+    empty variable counts as not set. ``allow_any_user`` is true only for
+    the word ``true``, with any capital letters; any other value is false,
+    so a typing error fails closed.
     """
 
-    if issuer_url and client_id and client_secret and redirect_uri:
-        return OIDCConfig(
-            issuer_url=issuer_url,
-            client_id=client_id,
-            client_secret=client_secret,
-            redirect_uri=redirect_uri,
+    if not (issuer_url and client_id and client_secret and redirect_uri):
+        return None
+    domain = (allowed_domain or "").strip().lower()
+    allowlist = LoginAllowlist(
+        subjects=frozenset(_split(allowed_subjects)),
+        emails=frozenset(email.lower() for email in _split(allowed_emails)),
+        domain=domain or None,
+        allow_any=(allow_any_user or "").strip().lower() == "true",
+    )
+    if allowlist.is_empty:
+        raise OIDCConfigError(
+            "OIDC login is off: set COMFYUI_CURU_AUTH_OIDC_ALLOWED_SUBJECTS, "
+            "COMFYUI_CURU_AUTH_OIDC_ALLOWED_EMAILS or "
+            "COMFYUI_CURU_AUTH_OIDC_ALLOWED_DOMAIN, or set "
+            "COMFYUI_CURU_AUTH_OIDC_ALLOW_ANY_USER=true to let the provider "
+            "decide who can log in"
         )
-    return None
+    return OIDCConfig(
+        issuer_url=issuer_url,
+        client_id=client_id,
+        client_secret=client_secret,
+        redirect_uri=redirect_uri,
+        allowlist=allowlist,
+    )
 
 
 def discovery_url(issuer_url: str) -> str:
@@ -615,15 +702,20 @@ def build_oidc_routes(
             ) from exc
         raise web.HTTPFound(build_authorization_url(config, discovery, store))
 
-    def _reject_callback(key: str, *, cause: BaseException | None = None) -> NoReturn:
+    def _reject_callback(
+        key: str, *, reason: str = "", cause: BaseException | None = None
+    ) -> NoReturn:
         # Same RateLimiter/logger the Bearer-header and login-form paths
         # already use (T036/T037, US3) -- not a parallel mechanism.
-        # fail2ban/crowdsec key off this one stable, greppable format.
+        # fail2ban/crowdsec key off the stable prefix "authentication
+        # failure from <IP>"; the reason in the parentheses is for the
+        # operator, and never holds a token or a claim value.
         if rate_limiter is not None:
             rate_limiter.record_failure(key)
         _logger.warning(
-            "comfyui_curu_auth: authentication failure from %s (oidc callback)",
+            "comfyui_curu_auth: authentication failure from %s (oidc callback%s)",
             key,
+            f": {reason}" if reason else "",
         )
         raise web.HTTPUnauthorized(text="OIDC login failed") from cause
 
@@ -672,14 +764,21 @@ def build_oidc_routes(
                 config, discovery, code, code_verifier=in_flight.pkce_verifier
             )
             id_token = token_response["id_token"]
-            await verify_id_token(
+            claims = await verify_id_token(
                 id_token,
                 config=config,
                 discovery=discovery,
                 expected_nonce=in_flight.nonce,
             )
-        except (OIDCDiscoveryError, OIDCTokenVerificationError, KeyError) as exc:
-            _reject_callback(key, cause=exc)
+        except OIDCTokenVerificationError as exc:
+            _reject_callback(key, reason=exc.reason, cause=exc)
+        except OIDCDiscoveryError as exc:
+            _reject_callback(key, reason="discovery document refused", cause=exc)
+        except KeyError as exc:
+            _reject_callback(key, reason="no id_token in the token response", cause=exc)
+
+        if not config.allowlist.permits(claims):
+            _reject_callback(key, reason="the person is not on the allowlist")
 
         if rate_limiter is not None:
             rate_limiter.record_success(key)
@@ -699,11 +798,14 @@ def build_oidc_routes(
 __all__ = [
     "ALLOWED_ALGORITHMS",
     "CLOCK_LEEWAY_SECONDS",
+    "DEFAULT_SCOPES",
     "OIDC_CALLBACK_PATH",
     "OIDC_START_PATH",
     "AuthorizationRequestStore",
     "InFlightAuthRequest",
+    "LoginAllowlist",
     "OIDCConfig",
+    "OIDCConfigError",
     "OIDCDiscoveryError",
     "OIDCTokenVerificationError",
     "build_authorization_url",
