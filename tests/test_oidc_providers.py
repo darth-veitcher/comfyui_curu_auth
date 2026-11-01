@@ -108,22 +108,24 @@ class TestTheIssuerIsUsedExactly:
         from oidc import fetch_discovery_document
 
         async with FakeIssuer() as issuer:
-            document = await fetch_discovery_document(issuer.issuer)
+            configured = issuer.issuer
+            document = await fetch_discovery_document(configured)
 
-        assert document["issuer"] == issuer.issuer
-        assert issuer.issuer.endswith("/")
+        assert document["issuer"] == configured
+        assert configured.endswith("/")
 
     async def test_a_document_that_names_another_issuer_is_refused(self) -> None:
         from oidc import OIDCDiscoveryError, fetch_discovery_document
 
         async with FakeIssuer() as issuer:
-            issuer.discovery_overrides["issuer"] = issuer.issuer.rstrip("/")
+            configured = issuer.issuer
+            issuer.discovery_overrides["issuer"] = configured.rstrip("/")
             with pytest.raises(OIDCDiscoveryError) as refused:
-                await fetch_discovery_document(issuer.issuer)
+                await fetch_discovery_document(configured)
 
         # The error names both values, so the operator can copy the right one.
-        assert issuer.issuer in str(refused.value)
-        assert issuer.issuer.rstrip("/") + "'" in str(refused.value)
+        assert repr(configured) in str(refused.value)
+        assert repr(configured.rstrip("/")) in str(refused.value)
 
     async def test_a_login_with_another_issuer_in_the_document_gets_503(
         self,
