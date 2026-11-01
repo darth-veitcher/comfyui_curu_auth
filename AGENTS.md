@@ -38,7 +38,7 @@ The articles are in [the constitution](.specify/memory/constitution.md).
 | Path | Contents |
 |---|---|
 | `gate.py` | The credential, the middleware, the sessions, the rate limiter and the login form. |
-| `oidc.py` | The OIDC login: discovery, keys, ID-token rules, the allowlist and the routes. |
+| `oidc.py` | The OIDC login (discovery, keys, ID-token rules, the allowlist, the routes) and the access-token check with its key cache. |
 | `__init__.py` | The wiring that ComfyUI imports. It reads the environment. |
 | `tests/` | The default tests. `tests/support/fake_issuer.py` is the fake OIDC provider. |
 | `tests/system/` | The `system` tier. It uses `docker-compose.yml` and `docker/` in the root of the repository. |
@@ -50,7 +50,7 @@ The articles are in [the constitution](.specify/memory/constitution.md).
 
 ## Current work
 
-Active spec: [specs/003-oidc-provider-fixes/spec.md](specs/003-oidc-provider-fixes/spec.md) and its [plan.md](specs/003-oidc-provider-fixes/plan.md). `beacon bullet status` names the bullet of the current branch.
+Active spec: [specs/004-oidc-access-tokens/spec.md](specs/004-oidc-access-tokens/spec.md) and its [plan.md](specs/004-oidc-access-tokens/plan.md). `beacon bullet status` names the bullet of the current branch.
 
 ## Known problems
 
@@ -58,5 +58,6 @@ Active spec: [specs/003-oidc-provider-fixes/spec.md](specs/003-oidc-provider-fix
 |---|---|
 | Ruff reports N999 for `__init__.py`. | The directory of the checkout has a hyphen in its name. Use a name with no hyphen, for example for a git worktree. |
 | The `rauthy` tier fails at once. | Start Docker. The tier fails on purpose without Docker, so a missing tier is never a silent pass. |
+| `.specify/scripts/bash/create-new-feature.sh` makes the spec folder, but no branch. | Spec Kit 1.x does not create the branch. Run `git checkout -b <NNN-slug>` from `main`. |
 | rauthy ignores a change to the bootstrap files. | rauthy reads them only at its first start. Each test run starts a new container. |
 | After a release, `CHANGELOG.md` still has entries under "Unreleased". | Move them out in the next pull request. python-semantic-release writes each version under `<!-- version list -->` and does not empty "Unreleased". |

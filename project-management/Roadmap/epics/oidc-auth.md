@@ -25,6 +25,7 @@ _SpecKit specs that contribute to this epic. Linked automatically when
 
 - specs/002-oidc-login/
 - specs/003-oidc-provider-fixes/ — The OIDC login works with rauthy, Authentik and other providers
+- specs/004-oidc-access-tokens/
 
 ## ADRs
 _Cross-cutting decisions this epic required. Epic creation/editing is a

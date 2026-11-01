@@ -28,6 +28,10 @@ from joserfc.jwk import ECKey, KeyParameters, OKPKey, RSAKey
 
 CLIENT_ID = "comfyui-curu-auth"
 CLIENT_SECRET = "fake-client-secret"
+#: The audience of the gate in resource-server mode, and the client id of a
+#: program that calls it (spec 004).
+AUDIENCE = "http://comfyui.test"
+PROGRAM_ID = "comfy-mcp-backend"
 
 
 def _b64(data: bytes) -> str:
@@ -36,6 +40,25 @@ def _b64(data: bytes) -> str:
 
 def _segment(value: dict[str, Any]) -> str:
     return _b64(json.dumps(value, separators=(",", ":")).encode())
+
+
+#: The keys made in this test run, by (kid, alg). A 2048-bit RSA key takes up
+#: to a second to make, and each test starts a new issuer; a test that needs a
+#: key that no other issuer has uses a new ``kid``.
+_KEYS: dict[tuple[str, str], Any] = {}
+
+
+def _private_key(kid: str, alg: str) -> Any:
+    if (kid, alg) not in _KEYS:
+        parameters: KeyParameters = {"kid": kid}
+        if alg.startswith(("RS", "PS")):
+            key: Any = RSAKey.generate_key(2048, parameters=parameters, private=True)
+        elif alg == "ES256":
+            key = ECKey.generate_key("P-256", parameters=parameters, private=True)
+        else:
+            key = OKPKey.generate_key("Ed25519", parameters=parameters, private=True)
+        _KEYS[(kid, alg)] = key
+    return _KEYS[(kid, alg)]
 
 
 class FakeIssuer:
@@ -76,14 +99,7 @@ class FakeIssuer:
         self._server: TestServer | None = None
 
     def add_key(self, kid: str, alg: str) -> None:
-        parameters: KeyParameters = {"kid": kid}
-        if alg.startswith(("RS", "PS")):
-            key: Any = RSAKey.generate_key(2048, parameters=parameters, private=True)
-        elif alg == "ES256":
-            key = ECKey.generate_key("P-256", parameters=parameters, private=True)
-        else:
-            key = OKPKey.generate_key("Ed25519", parameters=parameters, private=True)
-        self.keys[kid] = (alg, key)
+        self.keys[kid] = (alg, _private_key(kid, alg))
 
     async def __aenter__(self) -> FakeIssuer:
         self._server = TestServer(self._app(), host="127.0.0.1")
@@ -193,6 +209,41 @@ class FakeIssuer:
         with warnings.catch_warnings():
             warnings.simplefilter("ignore", SecurityWarning)
             return jwt.encode(protected, self.claims(**claims), key, algorithms=[alg])
+
+    def access_token(
+        self,
+        *,
+        kid: str = "rsa-1",
+        typ: str | None = "at+jwt",
+        lifetime: int = 600,
+        issued: int | None = None,
+        **claims: Any,
+    ) -> str:
+        """An access token as rauthy gives it for ``client_credentials``.
+
+        The defaults pass each check of spec 004. A claim with the value None
+        is left out, and ``typ=None`` leaves ``typ`` out of the header.
+        """
+        alg, key = self.keys[kid]
+        now = int(time.time()) if issued is None else issued
+        body: dict[str, Any] = {
+            "iss": self.issuer,
+            "aud": [PROGRAM_ID, AUDIENCE],
+            "azp": PROGRAM_ID,
+            "scope": "openid comfy",
+            "iat": now,
+            "nbf": now,
+            "exp": now + lifetime,
+            "jti": f"jti-{now}-{kid}",
+        }
+        body.update(claims)
+        body = {name: value for name, value in body.items() if value is not None}
+        protected: dict[str, Any] = {"alg": alg, "kid": kid}
+        if typ is not None:
+            protected["typ"] = typ
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore", SecurityWarning)
+            return jwt.encode(protected, body, key, algorithms=[alg])
 
     def hs256_token(self, secret: bytes, *, kid: str = "rsa-1", **claims: Any) -> str:
         """An HS256 token, as an Authentik provider with no signing key gives it.

@@ -32,6 +32,10 @@ services:
       - COMFYUI_CURU_AUTH_OIDC_ALLOWED_DOMAIN=${COMFYUI_CURU_AUTH_OIDC_ALLOWED_DOMAIN:-}
       - COMFYUI_CURU_AUTH_OIDC_ALLOW_ANY_USER=${COMFYUI_CURU_AUTH_OIDC_ALLOW_ANY_USER:-}
       - COMFYUI_CURU_AUTH_OIDC_SCOPES=${COMFYUI_CURU_AUTH_OIDC_SCOPES:-}
+      # Access tokens on the Bearer path (spec 004, ADR-008). Off unless the
+      # issuer above and the audience are both set.
+      - COMFYUI_CURU_AUTH_OIDC_AUDIENCE=${COMFYUI_CURU_AUTH_OIDC_AUDIENCE:-}
+      - COMFYUI_CURU_AUTH_OIDC_REQUIRED_SCOPES=${COMFYUI_CURU_AUTH_OIDC_REQUIRED_SCOPES:-}
     volumes:
       # Bind-mounts this repo's own working tree -- not a build-time COPY
       # or a git clone of a published release (contrast with

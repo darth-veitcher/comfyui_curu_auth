@@ -26,6 +26,7 @@ than silently.
 
 from __future__ import annotations
 
+import asyncio
 import base64
 import hashlib
 import json
@@ -33,6 +34,7 @@ import logging
 import secrets
 import time
 import warnings
+from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, NoReturn
 from urllib.parse import urlencode, urlsplit
@@ -59,6 +61,7 @@ try:
         COOKIE_MAX_AGE_SECONDS,
         RateLimiter,
         SessionStore,
+        TokenCheckUnavailableError,
         client_key,
         set_session_cookie,
     )
@@ -71,6 +74,7 @@ except ImportError:
         COOKIE_MAX_AGE_SECONDS,
         RateLimiter,
         SessionStore,
+        TokenCheckUnavailableError,
         client_key,
         set_session_cookie,
     )
@@ -477,17 +481,24 @@ def read_token_header(token: str) -> dict[str, Any]:
     compact JWS with a JSON object as its header.
     """
 
+    return _decode_segment(token, 0)
+
+
+def _decode_segment(token: str, index: int) -> dict[str, Any]:
+    """Part ``index`` of a compact JWS as a JSON object, with no check of the
+    signature. Raises :class:`OIDCTokenVerificationError` for any other shape."""
+
     parts = token.split(".")
     if len(parts) != 3:
         raise OIDCTokenVerificationError("malformed token")
     try:
-        padded = parts[0] + "=" * (-len(parts[0]) % 4)
-        header = json.loads(base64.urlsafe_b64decode(padded.encode("ascii")))
+        padded = parts[index] + "=" * (-len(parts[index]) % 4)
+        value = json.loads(base64.urlsafe_b64decode(padded.encode("ascii")))
     except (ValueError, UnicodeError) as exc:
         raise OIDCTokenVerificationError("malformed token") from exc
-    if not isinstance(header, dict):
+    if not isinstance(value, dict):
         raise OIDCTokenVerificationError("malformed token")
-    return header
+    return value
 
 
 def check_token_algorithm(header: dict[str, Any]) -> str:
@@ -583,6 +594,271 @@ def _require_ok(response: aiohttp.ClientResponse) -> None:
     response.raise_for_status()
     if response.status >= 300:
         raise aiohttp.ClientError(f"HTTP {response.status}")
+
+
+# --------------------------------------------------------------------------
+# Resource-server mode: OIDC access tokens on the Bearer path (spec 004,
+# ADR-008). It uses the issuer code and the key code above; nothing here is
+# a second copy of a rule of the login.
+# --------------------------------------------------------------------------
+
+#: The ``typ`` values of an access token (RFC 9068). Compared in small letters.
+ACCESS_TOKEN_TYPES = frozenset({"at+jwt", "application/at+jwt"})
+
+#: The longest life of an access token, from ``iat`` to ``exp``, in seconds.
+MAX_ACCESS_TOKEN_LIFETIME_SECONDS = 3600
+
+#: The shortest time between two reads of the keys, in seconds (ADR-008).
+KEY_REFRESH_SECONDS = 60.0
+
+#: The longest time the gate trusts keys without a new read, in seconds. A
+#: key that the identity provider removed stops working within this time.
+KEY_MAX_AGE_SECONDS = 3600.0
+
+
+@dataclass(frozen=True)
+class ResourceServerConfig:
+    """The settings of resource-server mode. The mode is on only when this
+    exists: :func:`resolve_resource_server_config` never makes a partial one."""
+
+    issuer_url: str
+    audience: str
+    required_scopes: tuple[str, ...] = ()
+
+
+def resolve_resource_server_config(
+    *,
+    issuer_url: str | None,
+    audience: str | None,
+    required_scopes: str | None,
+) -> ResourceServerConfig | None:
+    """``ResourceServerConfig`` when the issuer and the audience are both set;
+    ``None`` when the audience and the required scopes are both absent.
+
+    Each other mix is a partial setup, and raises :class:`OIDCConfigError`
+    (ADR-008): an audience with no issuer, required scopes with no audience,
+    or an issuer that uses ``http`` off loopback. ``__init__.py`` logs the
+    error and keeps the mode off, and the gate stays on. An issuer alone is
+    not partial: the OIDC login can use it with no mode.
+    """
+
+    scopes = tuple(dict.fromkeys(_split(required_scopes)))
+    if not audience:
+        if scopes:
+            raise OIDCConfigError(
+                "OIDC access tokens are off: COMFYUI_CURU_AUTH_OIDC_REQUIRED_SCOPES "
+                "needs COMFYUI_CURU_AUTH_OIDC_AUDIENCE"
+            )
+        return None
+    if not issuer_url:
+        raise OIDCConfigError(
+            "OIDC access tokens are off: COMFYUI_CURU_AUTH_OIDC_AUDIENCE needs "
+            "COMFYUI_CURU_AUTH_OIDC_ISSUER_URL"
+        )
+    if not is_safe_url(issuer_url):
+        raise OIDCConfigError(
+            "OIDC access tokens are off: COMFYUI_CURU_AUTH_OIDC_ISSUER_URL must "
+            "use https (plain http is allowed only on localhost, 127.0.0.1 and ::1)"
+        )
+    return ResourceServerConfig(
+        issuer_url=issuer_url, audience=audience, required_scopes=scopes
+    )
+
+
+class IssuerKeys:
+    """The discovery document and the JWKS of one issuer, kept in memory.
+
+    A known ``kid`` never waits for a read. An unknown ``kid`` causes one new
+    read, at most one time in ``refresh_seconds``. A failed read also starts
+    that time, so an issuer that is down gets few requests, and a stream of
+    tokens with invented ``kid`` values cannot make the gate read the keys
+    again and again (ADR-008). One read runs at a time.
+    """
+
+    def __init__(
+        self,
+        issuer_url: str,
+        *,
+        refresh_seconds: float = KEY_REFRESH_SECONDS,
+        max_age_seconds: float = KEY_MAX_AGE_SECONDS,
+        timeout: float = 10.0,
+        clock: Callable[[], float] = time.monotonic,
+    ) -> None:
+        self._issuer_url = issuer_url
+        self._refresh_seconds = refresh_seconds
+        self._max_age_seconds = max_age_seconds
+        self._loaded_at: float | None = None
+        self._timeout = timeout
+        self._clock = clock
+        self._jwks_uri: str | None = None
+        self._key_set: KeySet | None = None
+        self._read_at: float | None = None
+        self._lock = asyncio.Lock()
+
+    def _select(self, header: dict[str, Any]) -> tuple[Any, str] | None:
+        """The key, or None when the keys are absent or do not know the ``kid``."""
+
+        if self._key_set is None:
+            return None
+        try:
+            return select_signing_key(header, self._key_set)
+        except OIDCTokenVerificationError as exc:
+            if exc.reason != "unknown key":
+                raise
+            return None
+
+    def _stale(self) -> bool:
+        return (
+            self._loaded_at is not None
+            and self._clock() - self._loaded_at >= self._max_age_seconds
+        )
+
+    async def key_for(self, header: dict[str, Any]) -> tuple[Any, str]:
+        found = self._select(header)
+        if found is not None and not self._stale():
+            return found
+        async with self._lock:
+            # Another request may have read the keys while this one waited.
+            found = self._select(header)
+            if found is not None and not self._stale():
+                return found
+            if self._read_at is None or (
+                self._clock() - self._read_at >= self._refresh_seconds
+            ):
+                await self._read()
+        if self._key_set is None:
+            raise OIDCTokenVerificationError("issuer not available")
+        found = self._select(header)
+        if found is None:
+            raise OIDCTokenVerificationError("unknown key")
+        return found
+
+    async def _read(self) -> None:
+        self._read_at = self._clock()
+        try:
+            if self._jwks_uri is None:
+                document = await fetch_discovery_document(
+                    self._issuer_url, timeout=self._timeout
+                )
+                self._jwks_uri = str(document["jwks_uri"])
+            self._key_set = await _fetch_jwks(self._jwks_uri, timeout=self._timeout)
+            self._loaded_at = self._read_at
+        except (OIDCDiscoveryError, OIDCTokenVerificationError) as exc:
+            # A provider fault, not an authentication failure: another text,
+            # so fail2ban and crowdsec do not ban the caller for it. The old
+            # keys, if any, stay in use.
+            _logger.error("comfyui_curu_auth: cannot read the OIDC keys: %s", exc)
+
+
+def _scopes_of(claims: dict[str, Any]) -> set[str]:
+    """The scopes of a token: ``scope`` (a string) or ``scp`` (a list or a string)."""
+
+    found: set[str] = set()
+    for name in ("scope", "scp"):
+        value = claims.get(name)
+        if isinstance(value, str):
+            found.update(value.split())
+        elif isinstance(value, list):
+            found.update(item for item in value if isinstance(item, str))
+    return found
+
+
+async def verify_access_token(
+    token: str, *, config: ResourceServerConfig, keys: IssuerKeys
+) -> dict[str, Any]:
+    """The claims of an access token that passes each check of ADR-008.
+
+    Raises :class:`OIDCTokenVerificationError` with a fixed ``reason`` at the
+    first check that fails. Checks 1 to 4 need no network, so a token that
+    fails them never causes a read of the JWKS.
+    """
+
+    from joserfc import errors as jose_errors  # deferred -- module docstring (issue #5)
+    from joserfc import jwt
+
+    # 1-2. The shape, and no `none` or HMAC.
+    header = read_token_header(token)
+    check_token_algorithm(header)
+    # 3. The token type.
+    typ = header.get("typ")
+    plain = typ is None or (isinstance(typ, str) and typ.lower() == "jwt")
+    if not plain and not (isinstance(typ, str) and typ.lower() in ACCESS_TOKEN_TYPES):
+        raise OIDCTokenVerificationError("wrong token type")
+    # 4. The issuer, before any read of the keys.
+    if _decode_segment(token, 1).get("iss") != config.issuer_url:
+        raise OIDCTokenVerificationError("wrong issuer")
+    # 5-6. The key sets the algorithm; then the signature.
+    key, algorithm = await keys.key_for(header)
+    try:
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore", jose_errors.SecurityWarning)
+            claims = jwt.decode(token, key, algorithms=[algorithm]).claims
+    except jose_errors.BadSignatureError as exc:
+        raise OIDCTokenVerificationError("bad signature") from exc
+    except (jose_errors.JoseError, ValueError) as exc:
+        raise OIDCTokenVerificationError("malformed token") from exc
+    # 7. The claims that each token must have.
+    if any(name not in claims for name in ("iss", "aud", "exp", "iat")):
+        raise OIDCTokenVerificationError("missing claim")
+    if claims["iss"] != config.issuer_url:
+        raise OIDCTokenVerificationError("wrong issuer")
+    audience = claims["aud"]
+    audiences = [audience] if isinstance(audience, str) else audience
+    if not isinstance(audiences, list) or config.audience not in audiences:
+        raise OIDCTokenVerificationError("wrong audience")
+    # 8-9. The time. No leeway for exp; 60 seconds for iat and nbf.
+    times = [claims["exp"], claims["iat"], claims.get("nbf", claims["iat"])]
+    if not all(isinstance(value, int | float) for value in times):
+        raise OIDCTokenVerificationError("malformed token")
+    expires, issued, not_before = times
+    now = time.time()
+    if now >= expires:
+        raise OIDCTokenVerificationError("expired")
+    if max(issued, not_before) > now + CLOCK_LEEWAY_SECONDS:
+        raise OIDCTokenVerificationError("not yet valid")
+    if expires - issued > MAX_ACCESS_TOKEN_LIFETIME_SECONDS:
+        raise OIDCTokenVerificationError("lifetime too long")
+    # 10. A token of the type JWT, or with no type, is not an ID token.
+    scopes = _scopes_of(claims)
+    client = claims.get("azp") or claims.get("client_id") or claims.get("cid")
+    if plain and not (client and scopes):
+        raise OIDCTokenVerificationError("ID token or no client id and scope")
+    # 11. The required scopes.
+    if not set(config.required_scopes) <= scopes:
+        raise OIDCTokenVerificationError("missing scope")
+    return claims
+
+
+def build_token_check(
+    config: ResourceServerConfig, keys: IssuerKeys | None = None
+) -> Callable[[str], Awaitable[str | None]]:
+    """The ``token_check`` for :func:`gate.build_gate_middleware` (ADR-008).
+
+    It returns ``None`` for a valid access token, and the fixed reason of
+    :func:`verify_access_token` for a refused one. It never raises for a
+    bad token. An accepted token writes its client id and ``sub`` at DEBUG,
+    for an audit that joins this log with the log of the caller.
+    """
+
+    issuer_keys = keys if keys is not None else IssuerKeys(config.issuer_url)
+
+    async def check(token: str) -> str | None:
+        try:
+            claims = await verify_access_token(token, config=config, keys=issuer_keys)
+        except OIDCTokenVerificationError as exc:
+            if exc.reason == "issuer not available":
+                # No keys at all: the identity provider failed, not the caller.
+                raise TokenCheckUnavailableError(exc.reason) from exc
+            return exc.reason
+        client = claims.get("azp") or claims.get("client_id") or claims.get("cid")
+        _logger.debug(
+            "comfyui_curu_auth: access token accepted (client %r, sub %r)",
+            client,
+            claims.get("sub"),
+        )
+        return None
+
+    return check
 
 
 async def verify_id_token(
@@ -848,26 +1124,35 @@ def build_oidc_routes(
 
 
 __all__ = [
+    "ACCESS_TOKEN_TYPES",
     "ALLOWED_ALGORITHMS",
     "CLOCK_LEEWAY_SECONDS",
     "DEFAULT_SCOPES",
+    "KEY_MAX_AGE_SECONDS",
+    "KEY_REFRESH_SECONDS",
+    "MAX_ACCESS_TOKEN_LIFETIME_SECONDS",
     "OIDC_CALLBACK_PATH",
     "OIDC_START_PATH",
     "AuthorizationRequestStore",
     "InFlightAuthRequest",
+    "IssuerKeys",
     "LoginAllowlist",
     "OIDCConfig",
     "OIDCConfigError",
     "OIDCDiscoveryError",
     "OIDCTokenVerificationError",
+    "ResourceServerConfig",
     "build_authorization_url",
     "build_oidc_routes",
+    "build_token_check",
     "check_token_algorithm",
     "discovery_url",
     "fetch_discovery_document",
     "is_safe_url",
     "read_token_header",
     "resolve_oidc_config",
+    "resolve_resource_server_config",
     "select_signing_key",
+    "verify_access_token",
     "verify_id_token",
 ]

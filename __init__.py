@@ -59,7 +59,9 @@ try:
         AuthorizationRequestStore,
         OIDCConfigError,
         build_oidc_routes,
+        build_token_check,
         resolve_oidc_config,
+        resolve_resource_server_config,
     )
     # only importable inside a real ComfyUI installation -- never present in
     # this repo's own environment, so `ty check` cannot resolve it either.
@@ -129,6 +131,28 @@ if server is not None:
         logging.getLogger("comfyui_curu_auth").error("comfyui_curu_auth: %s", _error)
         print(f"comfyui-curu-auth: {_error}", flush=True)
         _oidc_config = None
+    # Resource-server mode (spec 004, ADR-008): the Bearer path also accepts
+    # an OIDC access token. Off unless the issuer and the audience are both
+    # set; a partial setup is logged and leaves the mode off, never the gate.
+    _token_check = None
+    try:
+        _resource_server = resolve_resource_server_config(
+            issuer_url=os.environ.get("COMFYUI_CURU_AUTH_OIDC_ISSUER_URL"),
+            audience=os.environ.get("COMFYUI_CURU_AUTH_OIDC_AUDIENCE"),
+            required_scopes=os.environ.get("COMFYUI_CURU_AUTH_OIDC_REQUIRED_SCOPES"),
+        )
+    except OIDCConfigError as _error:
+        logging.getLogger("comfyui_curu_auth").error("comfyui_curu_auth: %s", _error)
+        print(f"comfyui-curu-auth: {_error}", flush=True)
+        _resource_server = None
+    if _resource_server is not None:
+        _token_check = build_token_check(_resource_server)
+        print(
+            "OIDC access tokens accepted on the Bearer path for audience "
+            f"{_resource_server.audience}",
+            flush=True,
+        )
+
     _public_paths = {LOGIN_PATH}
     if _oidc_config is not None:
         _public_paths |= {OIDC_START_PATH, OIDC_CALLBACK_PATH}
@@ -140,6 +164,7 @@ if server is not None:
             sessions=_sessions,
             rate_limiter=_rate_limiter,
             public_paths=_public_paths,
+            token_check=_token_check,
         )
     )
     _login_get, _login_post = build_login_routes(

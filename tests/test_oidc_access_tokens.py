@@ -1,0 +1,863 @@
+"""Hermetic tests of spec 004: the Bearer path accepts OIDC access tokens
+(issue #14, ADR-008).
+
+The scenario names come from
+``specs/004-oidc-access-tokens/features/oidc_access_tokens.feature``.
+"""
+
+from __future__ import annotations
+
+import asyncio
+import base64
+import json
+import time
+from typing import Any
+
+import pytest
+
+from tests.support.fake_issuer import AUDIENCE, PROGRAM_ID, FakeIssuer
+
+
+def _config(issuer: FakeIssuer, *, required_scopes: tuple[str, ...] = ()) -> Any:
+    from oidc import ResourceServerConfig
+
+    return ResourceServerConfig(
+        issuer_url=issuer.issuer, audience=AUDIENCE, required_scopes=required_scopes
+    )
+
+
+async def _check(
+    issuer: FakeIssuer,
+    token: str,
+    *,
+    keys: Any = None,
+    required_scopes: tuple[str, ...] = (),
+) -> dict[str, Any]:
+    from oidc import IssuerKeys, verify_access_token
+
+    return await verify_access_token(
+        token,
+        config=_config(issuer, required_scopes=required_scopes),
+        keys=keys or IssuerKeys(issuer.issuer),
+    )
+
+
+def _with_header(token: str, header: dict[str, Any]) -> str:
+    _old, _, rest = token.partition(".")
+    encoded = base64.urlsafe_b64encode(json.dumps(header).encode()).rstrip(b"=")
+    return f"{encoded.decode()}.{rest}"
+
+
+# --------------------------------------------------------------------------
+# User story 3: the gate refuses a bad token. User story 4: no needless read.
+# --------------------------------------------------------------------------
+
+
+class TestAValidAccessToken:
+    """Scenario: A valid access token."""
+
+    @pytest.mark.parametrize("kid", ["rsa-1", "ec-1", "ed-1"])
+    async def test_a_rauthy_token_passes(self, kid: str) -> None:
+        async with FakeIssuer() as issuer:
+            claims = await _check(issuer, issuer.access_token(kid=kid))
+
+        assert claims["azp"] == PROGRAM_ID
+
+    @pytest.mark.parametrize("typ", ["at+jwt", "application/at+jwt", "AT+JWT"])
+    async def test_the_rfc_9068_types_pass(self, typ: str) -> None:
+        async with FakeIssuer() as issuer:
+            await _check(issuer, issuer.access_token(typ=typ))
+
+    async def test_an_authentik_token_passes(self) -> None:
+        """typ JWT, aud the client id of the provider, azp and scope."""
+        async with FakeIssuer() as issuer:
+            token = issuer.access_token(
+                typ="JWT", aud=AUDIENCE, azp=AUDIENCE, sub="svc", scope="openid profile"
+            )
+            await _check(issuer, token)
+
+    async def test_an_okta_token_passes(self) -> None:
+        """No typ, cid as the client id, scp as a list."""
+        async with FakeIssuer() as issuer:
+            token = issuer.access_token(
+                typ=None, aud=AUDIENCE, azp=None, scope=None, cid="okta", scp=["comfy"]
+            )
+            await _check(issuer, token)
+
+
+class TestTheGateRefusesABadToken:
+    """Scenarios: Key confusion; alg none; An ID token; A token of 2 hours; An
+    expired token; Another audience; No required scope; No read for a cheap
+    refusal."""
+
+    async def _refused(
+        self,
+        issuer: FakeIssuer,
+        token: str,
+        *,
+        required_scopes: tuple[str, ...] = (),
+    ) -> str:
+        from oidc import OIDCTokenVerificationError
+
+        with pytest.raises(OIDCTokenVerificationError) as refused:
+            await _check(issuer, token, required_scopes=required_scopes)
+        reason = refused.value.reason
+        # No segment of a real token is in the reason. (Short test values such
+        # as "a.b" are letters that any text holds, so they are not checked.)
+        for part in token.split("."):
+            if len(part) >= 8:
+                assert part not in reason
+        return reason
+
+    async def test_key_confusion_is_refused_with_no_read(self) -> None:
+        async with FakeIssuer() as issuer:
+            token = issuer.hs256_token(
+                issuer.public_pem("rsa-1"), aud=AUDIENCE, azp=PROGRAM_ID, scope="comfy"
+            )
+            await self._refused(issuer, token)
+            reads = issuer.jwks_reads
+
+        assert reads == 0
+
+    async def test_alg_none_is_refused_with_no_read(self) -> None:
+        async with FakeIssuer() as issuer:
+            token = issuer.none_token(aud=AUDIENCE, azp=PROGRAM_ID, scope="comfy")
+            await self._refused(issuer, token)
+            reads = issuer.jwks_reads
+
+        assert reads == 0
+
+    @pytest.mark.parametrize("token", ["", "abc", "a.b", "a.b.c.d", "!!.??.**"])
+    async def test_a_bad_shape_is_refused_with_no_read(self, token: str) -> None:
+        async with FakeIssuer() as issuer:
+            await self._refused(issuer, token)
+            reads = issuer.jwks_reads
+
+        assert reads == 0
+
+    async def test_another_issuer_is_refused_with_no_read(self) -> None:
+        async with FakeIssuer() as issuer:
+            token = issuer.access_token(iss="https://other.example/")
+            reason = await self._refused(issuer, token)
+            reads = issuer.jwks_reads
+
+        assert reads == 0
+        assert reason == "wrong issuer"
+
+    @pytest.mark.parametrize("typ", ["id+jwt", "JOSE", "secevent+jwt"])
+    async def test_another_type_is_refused_with_no_read(self, typ: str) -> None:
+        async with FakeIssuer() as issuer:
+            await self._refused(issuer, issuer.access_token(typ=typ))
+            reads = issuer.jwks_reads
+
+        assert reads == 0
+
+    async def test_an_id_token_is_refused(self) -> None:
+        """typ JWT, the same aud, but no scope: an ID token."""
+        async with FakeIssuer() as issuer:
+            token = issuer.access_token(typ="JWT", aud=AUDIENCE, azp=None, scope=None)
+            reason = await self._refused(issuer, token)
+
+        assert reason == "ID token or no client id and scope"
+
+    @pytest.mark.parametrize(
+        "claims",
+        [
+            {"azp": None},
+            {"scope": None},
+            {"azp": None, "client_id": None, "cid": None},
+        ],
+    )
+    async def test_no_typ_needs_a_client_id_and_a_scope(
+        self, claims: dict[str, Any]
+    ) -> None:
+        async with FakeIssuer() as issuer:
+            await self._refused(issuer, issuer.access_token(typ=None, **claims))
+
+    async def test_a_token_of_2_hours_is_refused(self) -> None:
+        async with FakeIssuer() as issuer:
+            reason = await self._refused(issuer, issuer.access_token(lifetime=7200))
+
+        assert reason == "lifetime too long"
+
+    async def test_a_lifetime_of_3601_seconds_is_refused(self) -> None:
+        async with FakeIssuer() as issuer:
+            reason = await self._refused(issuer, issuer.access_token(lifetime=3601))
+
+        assert reason == "lifetime too long"
+
+    async def test_a_token_that_expires_now_is_refused(self) -> None:
+        """No leeway at all for exp: exp equal to the time now is expired."""
+        now = int(time.time())
+        async with FakeIssuer() as issuer:
+            token = issuer.access_token(issued=now - 300, lifetime=300)
+            reason = await self._refused(issuer, token)
+
+        assert reason == "expired"
+
+    async def test_a_lifetime_of_1_hour_passes(self) -> None:
+        async with FakeIssuer() as issuer:
+            await _check(issuer, issuer.access_token(lifetime=3600))
+
+    async def test_a_token_that_expired_1_second_ago_is_refused(self) -> None:
+        now = int(time.time())
+        async with FakeIssuer() as issuer:
+            token = issuer.access_token(issued=now - 301, lifetime=300)
+            reason = await self._refused(issuer, token)
+
+        assert reason == "expired"
+
+    @pytest.mark.parametrize(
+        ("claims", "accepted"),
+        [
+            ({"iat_offset": 30}, True),
+            ({"iat_offset": 90}, False),
+            ({"nbf_offset": 90}, False),
+        ],
+    )
+    async def test_iat_and_nbf_have_60_seconds_of_leeway(
+        self, claims: dict[str, int], accepted: bool
+    ) -> None:
+        now = int(time.time())
+        async with FakeIssuer() as issuer:
+            extra: dict[str, Any] = {}
+            if "iat_offset" in claims:
+                extra["issued"] = now + claims["iat_offset"]
+            if "nbf_offset" in claims:
+                extra["nbf"] = now + claims["nbf_offset"]
+            token = issuer.access_token(**extra)
+            if accepted:
+                await _check(issuer, token)
+            else:
+                await self._refused(issuer, token)
+
+    @pytest.mark.parametrize("claim", ["exp", "iat", "aud", "iss"])
+    async def test_a_missing_claim_is_refused(self, claim: str) -> None:
+        async with FakeIssuer() as issuer:
+            missing: dict[str, Any] = {claim: None}
+            await self._refused(issuer, issuer.access_token(**missing))
+
+    @pytest.mark.parametrize("aud", ["http://other.test", [PROGRAM_ID], []])
+    async def test_another_audience_is_refused(self, aud: Any) -> None:
+        async with FakeIssuer() as issuer:
+            reason = await self._refused(issuer, issuer.access_token(aud=aud))
+
+        assert reason in ("wrong audience", "missing claim")
+
+    async def test_an_audience_as_one_string_passes(self) -> None:
+        async with FakeIssuer() as issuer:
+            await _check(issuer, issuer.access_token(aud=AUDIENCE))
+
+    async def test_a_bad_signature_is_refused(self) -> None:
+        async with FakeIssuer() as issuer:
+            issuer.add_key("other", "RS256")
+            # Signed by "other", but the header names "rsa-1".
+            token = _with_header(
+                issuer.access_token(kid="other"),
+                {"alg": "RS256", "kid": "rsa-1", "typ": "at+jwt"},
+            )
+            reason = await self._refused(issuer, token)
+
+        assert reason == "bad signature"
+
+    @pytest.mark.parametrize(
+        ("claims", "accepted"),
+        [
+            ({"scope": "openid comfy"}, True),
+            ({"scope": "openid"}, False),
+            ({"scope": None, "scp": ["comfy", "x"]}, True),
+            ({"scope": None, "scp": "comfy x"}, True),
+            ({"scope": None, "scp": ["x"]}, False),
+        ],
+    )
+    async def test_each_required_scope_must_be_held(
+        self, claims: dict[str, Any], accepted: bool
+    ) -> None:
+        async with FakeIssuer() as issuer:
+            token = issuer.access_token(**claims)
+            if accepted:
+                await _check(issuer, token, required_scopes=("comfy",))
+            else:
+                reason = await self._refused(issuer, token, required_scopes=("comfy",))
+                assert reason == "missing scope"
+
+
+class TestTheKeysStayInMemory:
+    """Scenarios: One read of the keys; A key rotation; The 60-second limit."""
+
+    async def test_ten_tokens_cause_one_read(self) -> None:
+        from oidc import IssuerKeys
+
+        async with FakeIssuer() as issuer:
+            keys = IssuerKeys(issuer.issuer)
+            for _ in range(10):
+                await _check(issuer, issuer.access_token(), keys=keys)
+            reads = (issuer.discovery_reads, issuer.jwks_reads)
+
+        assert reads == (1, 1)
+
+    async def test_concurrent_tokens_cause_one_read(self) -> None:
+        from oidc import IssuerKeys
+
+        async with FakeIssuer() as issuer:
+            keys = IssuerKeys(issuer.issuer)
+            await asyncio.gather(
+                *(_check(issuer, issuer.access_token(), keys=keys) for _ in range(5))
+            )
+            reads = issuer.jwks_reads
+
+        assert reads == 1
+
+    async def test_a_key_rotation_reads_the_keys_again(self) -> None:
+        from oidc import IssuerKeys
+
+        clock = [1000.0]
+        async with FakeIssuer() as issuer:
+            keys = IssuerKeys(issuer.issuer, clock=lambda: clock[0])
+            await _check(issuer, issuer.access_token(), keys=keys)
+            issuer.add_key("rsa-2", "RS256")
+            clock[0] += 61
+            claims = await _check(issuer, issuer.access_token(kid="rsa-2"), keys=keys)
+            reads = issuer.jwks_reads
+
+        assert claims["azp"] == PROGRAM_ID
+        assert reads == 2
+
+    async def test_an_unknown_kid_within_60_seconds_causes_no_read(self) -> None:
+        from oidc import IssuerKeys, OIDCTokenVerificationError
+
+        clock = [1000.0]
+        async with FakeIssuer() as issuer:
+            keys = IssuerKeys(issuer.issuer, clock=lambda: clock[0])
+            await _check(issuer, issuer.access_token(), keys=keys)
+            issuer.add_key("rsa-2", "RS256")
+            clock[0] += 59
+            with pytest.raises(OIDCTokenVerificationError) as refused:
+                await _check(issuer, issuer.access_token(kid="rsa-2"), keys=keys)
+            reads_inside = issuer.jwks_reads
+            clock[0] += 2
+            await _check(issuer, issuer.access_token(kid="rsa-2"), keys=keys)
+            reads_after = issuer.jwks_reads
+
+        assert refused.value.reason == "unknown key"
+        assert (reads_inside, reads_after) == (1, 2)
+
+    async def test_a_failed_read_also_starts_the_60_seconds(self) -> None:
+        from oidc import IssuerKeys, OIDCTokenVerificationError
+
+        clock = [1000.0]
+        async with FakeIssuer() as issuer:
+            issuer.jwks_override = "not a key set"
+            keys = IssuerKeys(issuer.issuer, clock=lambda: clock[0])
+            for _ in range(3):
+                with pytest.raises(OIDCTokenVerificationError):
+                    await _check(issuer, issuer.access_token(), keys=keys)
+            reads = issuer.jwks_reads
+
+        assert reads == 1
+
+    async def test_the_discovery_rules_of_spec_003_apply(self) -> None:
+        from oidc import IssuerKeys, OIDCTokenVerificationError
+
+        async with FakeIssuer() as issuer:
+            issuer.discovery_overrides["jwks_uri"] = "http://idp.example.com/jwks"
+            with pytest.raises(OIDCTokenVerificationError) as refused:
+                await _check(
+                    issuer, issuer.access_token(), keys=IssuerKeys(issuer.issuer)
+                )
+
+        assert refused.value.reason == "issuer not available"
+
+
+# --------------------------------------------------------------------------
+# User stories 1, 2, 3 and 5: the token check on the gate, also on /ws.
+# --------------------------------------------------------------------------
+
+STATIC = "static-credential"
+
+
+async def _queue(request: Any) -> Any:
+    from aiohttp import web
+
+    return web.json_response({"queue_running": []})
+
+
+async def _ws(request: Any) -> Any:
+    from aiohttp import web
+
+    socket = web.WebSocketResponse()
+    await socket.prepare(request)
+    await socket.send_str("hello")
+    await socket.close()
+    return socket
+
+
+def _gate_app(
+    issuer: FakeIssuer,
+    *,
+    limiter: Any = None,
+    static: str = STATIC,
+    token_check: Any = "default",
+) -> Any:
+    from aiohttp import web
+
+    from gate import SessionStore, build_gate_middleware
+    from oidc import IssuerKeys, build_token_check
+
+    if token_check == "default":
+        token_check = build_token_check(_config(issuer), IssuerKeys(issuer.issuer))
+    app = web.Application(
+        middlewares=[
+            build_gate_middleware(
+                static,
+                sessions=SessionStore(),
+                rate_limiter=limiter,
+                token_check=token_check,
+            )
+        ]
+    )
+    app.router.add_get("/queue", _queue)
+    app.router.add_get("/ws", _ws)
+    return app
+
+
+def _bearer(token: str) -> dict[str, str]:
+    return {"Authorization": f"Bearer {token}"}
+
+
+class TestTheGateAcceptsAccessTokens:
+    """Scenarios: A valid access token; The static credential with the mode on;
+    The ws handshake with a valid token; The ws handshake with a refused token."""
+
+    async def test_a_valid_token_gets_the_answer(self) -> None:
+        from aiohttp.test_utils import TestClient, TestServer
+
+        async with (
+            FakeIssuer() as issuer,
+            TestClient(TestServer(_gate_app(issuer))) as client,
+        ):
+            response = await client.get(
+                "/queue", headers=_bearer(issuer.access_token())
+            )
+            status = response.status
+
+        assert status == 200
+
+    async def test_the_static_credential_still_works(self) -> None:
+        from aiohttp.test_utils import TestClient, TestServer
+
+        async with (
+            FakeIssuer() as issuer,
+            TestClient(TestServer(_gate_app(issuer))) as client,
+        ):
+            good = await client.get("/queue", headers=_bearer(STATIC))
+            wrong = await client.get("/queue", headers=_bearer("wrong"))
+            statuses = (good.status, wrong.status)
+
+        assert statuses == (200, 401)
+
+    async def test_a_static_credential_with_dots_never_reaches_the_token_check(
+        self,
+    ) -> None:
+        from aiohttp.test_utils import TestClient, TestServer
+
+        calls: list[str] = []
+
+        async def spy(token: str) -> str | None:
+            calls.append(token)
+            return "refused"
+
+        async with FakeIssuer() as issuer:
+            app = _gate_app(issuer, static="a.b.c", token_check=spy)
+            async with TestClient(TestServer(app)) as client:
+                response = await client.get("/queue", headers=_bearer("a.b.c"))
+                status = response.status
+
+        assert status == 200
+        assert calls == []
+
+    async def test_with_the_mode_off_a_valid_token_gets_401(self) -> None:
+        from aiohttp.test_utils import TestClient, TestServer
+
+        async with FakeIssuer() as issuer:
+            app = _gate_app(issuer, token_check=None)
+            async with TestClient(TestServer(app)) as client:
+                response = await client.get(
+                    "/queue", headers=_bearer(issuer.access_token())
+                )
+                status = response.status
+
+        assert status == 401
+
+    async def test_the_ws_handshake_with_a_valid_token(self) -> None:
+        from aiohttp.test_utils import TestClient, TestServer
+
+        async with (
+            FakeIssuer() as issuer,
+            TestClient(TestServer(_gate_app(issuer))) as client,
+        ):
+            socket = await client.ws_connect(
+                "/ws", headers=_bearer(issuer.access_token())
+            )
+            message = await socket.receive_str()
+            await socket.close()
+
+        assert message == "hello"
+
+    async def test_the_ws_handshake_with_a_refused_token_gets_401(self) -> None:
+        import aiohttp
+        from aiohttp.test_utils import TestClient, TestServer
+
+        async with (
+            FakeIssuer() as issuer,
+            TestClient(TestServer(_gate_app(issuer))) as client,
+        ):
+            with pytest.raises(aiohttp.WSServerHandshakeError) as refused:
+                await client.ws_connect(
+                    "/ws", headers=_bearer(issuer.access_token(aud="other"))
+                )
+
+        assert refused.value.status == 401
+
+
+class TestARefusedTokenCountsAndIsLogged:
+    """Scenarios: The log line of a refused token; A refused token counts;
+    comfy-mcp retries after a 401; Two refused tokens."""
+
+    async def test_the_log_line_names_the_reason_and_no_token(
+        self, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        from aiohttp.test_utils import TestClient, TestServer
+
+        from gate import RateLimiter
+
+        limiter = RateLimiter()
+        now = int(time.time())
+        async with FakeIssuer() as issuer:
+            token = issuer.access_token(issued=now - 400, lifetime=300)
+            with caplog.at_level("DEBUG", logger="comfyui_curu_auth"):
+                async with TestClient(
+                    TestServer(_gate_app(issuer, limiter=limiter))
+                ) as c:
+                    response = await c.get("/queue", headers=_bearer(token))
+                    status = response.status
+
+        messages = [r.getMessage() for r in caplog.records]
+        assert status == 401
+        assert (
+            "comfyui_curu_auth: authentication failure from 127.0.0.1 "
+            "(GET /queue: token refused: expired)"
+        ) in messages
+        for part in token.split("."):
+            assert not any(part in m for m in messages)
+        # Exactly one failure: the first wait is base_delay (1 second).
+        assert 0 < limiter.seconds_until_retry("127.0.0.1") <= 1.0
+
+    async def test_an_accepted_token_logs_its_client_and_subject_at_debug(
+        self, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        from aiohttp.test_utils import TestClient, TestServer
+
+        async with FakeIssuer() as issuer:
+            token = issuer.access_token(sub="svc-account")
+            with caplog.at_level("DEBUG", logger="comfyui_curu_auth"):
+                async with TestClient(TestServer(_gate_app(issuer))) as c:
+                    await c.get("/queue", headers=_bearer(token))
+
+        debug = [r.getMessage() for r in caplog.records if r.levelname == "DEBUG"]
+        assert any(PROGRAM_ID in m and "svc-account" in m for m in debug), debug
+        for part in token.split("."):
+            assert not any(part in m for m in debug)
+
+    async def test_a_valid_token_right_after_a_refused_one_passes(self) -> None:
+        """comfy-mcp gets a new token after a 401 and retries at once."""
+        from aiohttp.test_utils import TestClient, TestServer
+
+        from gate import RateLimiter
+
+        limiter = RateLimiter()
+        now = int(time.time())
+        async with FakeIssuer() as issuer:
+            expired = issuer.access_token(issued=now - 400, lifetime=300)
+            app = _gate_app(issuer, limiter=limiter)
+            async with TestClient(TestServer(app)) as client:
+                first = await client.get("/queue", headers=_bearer(expired))
+                second = await client.get(
+                    "/queue", headers=_bearer(issuer.access_token())
+                )
+                statuses = (first.status, second.status)
+
+        assert statuses == (401, 200)
+        # The valid token also clears the failure of the first one.
+        assert limiter.seconds_until_retry("127.0.0.1") == 0
+
+    async def test_a_refused_token_in_a_wait_gets_401_and_counts(
+        self, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        """A token is checked also in a wait, so it gets its real answer, 401,
+        and counts. So two requests of comfy-mcp at once, with one refused
+        token, both get 401, and both retry with a new token (ADR-008)."""
+        from aiohttp.test_utils import TestClient, TestServer
+
+        from gate import RateLimiter
+
+        limiter = RateLimiter()
+        async with FakeIssuer() as issuer:
+            bad = issuer.access_token(aud="other")
+            app = _gate_app(issuer, limiter=limiter)
+            with caplog.at_level("WARNING", logger="comfyui_curu_auth"):
+                async with TestClient(TestServer(app)) as client:
+                    first = await client.get("/queue", headers=_bearer(bad))
+                    second = await client.get("/queue", headers=_bearer(bad))
+                    statuses = (first.status, second.status)
+
+        assert statuses == (401, 401)
+        failures = [
+            r.getMessage()
+            for r in caplog.records
+            if "authentication failure from" in r.getMessage()
+        ]
+        # One line for each refused token, with its reason.
+        assert len(failures) == 2
+        assert all("token refused: wrong audience" in m for m in failures)
+        # Two failures: the wait is now 2 seconds.
+        assert limiter.seconds_until_retry("127.0.0.1") > 1.0
+
+    async def test_the_static_credential_still_waits_in_a_backoff(self) -> None:
+        """FR-004 of spec 002: a correct static credential in a wait gets 429."""
+        from aiohttp.test_utils import TestClient, TestServer
+
+        from gate import RateLimiter
+
+        limiter = RateLimiter()
+        async with FakeIssuer() as issuer:
+            app = _gate_app(issuer, limiter=limiter)
+            async with TestClient(TestServer(app)) as client:
+                await client.get("/queue", headers=_bearer("wrong"))
+                response = await client.get("/queue", headers=_bearer(STATIC))
+                status = response.status
+
+        assert status == 429
+
+
+# --------------------------------------------------------------------------
+# User story 2: the settings, and the static credential when they are absent.
+# --------------------------------------------------------------------------
+
+_ISSUER = "https://idp.example.com/auth/v1/"
+
+
+class TestTheSettings:
+    """Scenarios: No audience; An audience with no issuer is a start error."""
+
+    @pytest.mark.parametrize(
+        "settings",
+        [
+            {},
+            {"issuer_url": _ISSUER},
+            {"issuer_url": "", "audience": ""},
+        ],
+    )
+    def test_without_an_audience_the_mode_is_off(
+        self, settings: dict[str, str]
+    ) -> None:
+        from oidc import resolve_resource_server_config
+
+        values = {"issuer_url": None, "audience": None, "required_scopes": None}
+        assert resolve_resource_server_config(**{**values, **settings}) is None
+
+    @pytest.mark.parametrize(
+        ("settings", "message"),
+        [
+            ({"audience": AUDIENCE}, "COMFYUI_CURU_AUTH_OIDC_ISSUER_URL"),
+            ({"required_scopes": "comfy"}, "COMFYUI_CURU_AUTH_OIDC_AUDIENCE"),
+            (
+                {"issuer_url": _ISSUER, "required_scopes": "comfy"},
+                "COMFYUI_CURU_AUTH_OIDC_AUDIENCE",
+            ),
+            ({"issuer_url": "http://idp.lan/", "audience": AUDIENCE}, "https"),
+        ],
+    )
+    def test_a_partial_or_unsafe_setup_is_a_start_error(
+        self, settings: dict[str, str], message: str
+    ) -> None:
+        from oidc import OIDCConfigError, resolve_resource_server_config
+
+        values = {"issuer_url": None, "audience": None, "required_scopes": None}
+        with pytest.raises(OIDCConfigError) as refused:
+            resolve_resource_server_config(**{**values, **settings})
+
+        assert message in str(refused.value)
+
+    def test_issuer_and_audience_turn_the_mode_on(self) -> None:
+        from oidc import resolve_resource_server_config
+
+        config = resolve_resource_server_config(
+            issuer_url=_ISSUER, audience=AUDIENCE, required_scopes="comfy, comfy write"
+        )
+
+        assert config is not None
+        assert (config.issuer_url, config.audience) == (_ISSUER, AUDIENCE)
+        assert config.required_scopes == ("comfy", "write")
+
+
+async def _queue_through_init(
+    monkeypatch: pytest.MonkeyPatch, env: dict[str, str], token: str
+) -> int:
+    """GET /queue with ``token`` through the real __init__.py wiring."""
+    from aiohttp.test_utils import TestClient, TestServer
+
+    from tests.test_oidc import _load_init_with_fake_server
+
+    app = _load_init_with_fake_server(monkeypatch, oidc_env=env)
+    app.router.add_get("/queue", _queue)
+    async with TestClient(TestServer(app)) as client:
+        response = await client.get("/queue", headers=_bearer(token))
+        return response.status
+
+
+class TestTheWiringOfInit:
+    """Scenarios: No audience; An audience with no issuer keeps the gate on."""
+
+    async def test_issuer_and_audience_accept_a_token(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        async with FakeIssuer() as issuer:
+            status = await _queue_through_init(
+                monkeypatch,
+                {
+                    "COMFYUI_CURU_AUTH_OIDC_ISSUER_URL": issuer.issuer,
+                    "COMFYUI_CURU_AUTH_OIDC_AUDIENCE": AUDIENCE,
+                    "COMFYUI_CURU_AUTH_OIDC_REQUIRED_SCOPES": "comfy",
+                },
+                issuer.access_token(),
+            )
+
+        assert status == 200
+
+    async def test_no_audience_refuses_a_token(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        async with FakeIssuer() as issuer:
+            status = await _queue_through_init(
+                monkeypatch,
+                {"COMFYUI_CURU_AUTH_OIDC_ISSUER_URL": issuer.issuer},
+                issuer.access_token(),
+            )
+
+        assert status == 401
+
+    async def test_an_audience_with_no_issuer_logs_an_error_and_keeps_the_gate(
+        self, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        async with FakeIssuer() as issuer:
+            with caplog.at_level("ERROR", logger="comfyui_curu_auth"):
+                status = await _queue_through_init(
+                    monkeypatch,
+                    {"COMFYUI_CURU_AUTH_OIDC_AUDIENCE": AUDIENCE},
+                    issuer.access_token(),
+                )
+
+        assert status == 401
+        assert any(
+            "COMFYUI_CURU_AUTH_OIDC_ISSUER_URL" in r.getMessage()
+            for r in caplog.records
+            if r.levelname == "ERROR"
+        )
+
+
+# --------------------------------------------------------------------------
+# Review of spec 004: provider faults, key age, the header encoding.
+# --------------------------------------------------------------------------
+
+
+class TestAnIdentityProviderOutageIsNotAFailure:
+    """When the gate cannot read the keys, the caller did nothing wrong: 503,
+    no failure in the wait, and no "authentication failure" line, so fail2ban
+    does not ban comfy-mcp for an outage of the identity provider."""
+
+    async def test_no_keys_gives_503_and_no_failure(
+        self, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        from aiohttp.test_utils import TestClient, TestServer
+
+        from gate import RateLimiter
+
+        limiter = RateLimiter()
+        async with FakeIssuer() as issuer:
+            issuer.jwks_override = "not a key set"
+            app = _gate_app(issuer, limiter=limiter)
+            with caplog.at_level("WARNING", logger="comfyui_curu_auth"):
+                async with TestClient(TestServer(app)) as client:
+                    response = await client.get(
+                        "/queue", headers=_bearer(issuer.access_token())
+                    )
+                    status = response.status
+
+        messages = [r.getMessage() for r in caplog.records]
+        assert status == 503
+        assert limiter.seconds_until_retry("127.0.0.1") == 0
+        assert not any("authentication failure" in m for m in messages), messages
+        assert any("identity provider unavailable" in m for m in messages), messages
+
+
+class TestTheKeysHaveAMaximumAge:
+    """A key that the identity provider removed is not trusted for ever."""
+
+    async def test_after_1_hour_the_keys_are_read_again(self) -> None:
+        from oidc import IssuerKeys, OIDCTokenVerificationError
+
+        clock = [1000.0]
+        async with FakeIssuer() as issuer:
+            keys = IssuerKeys(issuer.issuer, clock=lambda: clock[0])
+            token = issuer.access_token(kid="rsa-1")
+            await _check(issuer, token, keys=keys)
+            del issuer.keys["rsa-1"]
+            clock[0] += 3599
+            await _check(issuer, token, keys=keys)
+            reads_before = issuer.jwks_reads
+            clock[0] += 2
+            with pytest.raises(OIDCTokenVerificationError) as refused:
+                await _check(issuer, token, keys=keys)
+            reads_after = issuer.jwks_reads
+
+        assert (reads_before, reads_after) == (1, 2)
+        assert refused.value.reason == "unknown key"
+
+    async def test_a_failed_read_at_the_maximum_age_keeps_the_old_keys(self) -> None:
+        from oidc import IssuerKeys
+
+        clock = [1000.0]
+        async with FakeIssuer() as issuer:
+            keys = IssuerKeys(issuer.issuer, clock=lambda: clock[0])
+            await _check(issuer, issuer.access_token(), keys=keys)
+            issuer.jwks_override = "not a key set"
+            clock[0] += 3601
+            claims = await _check(issuer, issuer.access_token(), keys=keys)
+
+        assert claims["azp"] == PROGRAM_ID
+
+
+class TestAHeaderThatIsNotLatin1:
+    """Issue #19: a header outside Latin-1 gave HTTP 500."""
+
+    @pytest.mark.parametrize("with_mode", [False, True])
+    async def test_it_is_a_wrong_credential(self, with_mode: bool) -> None:
+        from aiohttp.test_utils import TestClient, TestServer
+
+        from gate import RateLimiter
+
+        limiter = RateLimiter()
+        async with FakeIssuer() as issuer:
+            app = _gate_app(
+                issuer, limiter=limiter, token_check="default" if with_mode else None
+            )
+            async with TestClient(TestServer(app)) as client:
+                first = await client.get(
+                    "/queue", headers=_bearer("\u20ac.\u20ac.\u20ac")
+                )
+                second = await client.get("/queue", headers=_bearer("\u20ac"))
+                statuses = (first.status, second.status)
+
+        # The first counts as a failure, so the second is in a wait.
+        assert statuses == (401, 429)

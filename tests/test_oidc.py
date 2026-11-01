@@ -1257,6 +1257,8 @@ def _load_init_with_fake_server(
         "COMFYUI_CURU_AUTH_OIDC_ALLOWED_DOMAIN",
         "COMFYUI_CURU_AUTH_OIDC_ALLOW_ANY_USER",
         "COMFYUI_CURU_AUTH_OIDC_SCOPES",
+        "COMFYUI_CURU_AUTH_OIDC_AUDIENCE",
+        "COMFYUI_CURU_AUTH_OIDC_REQUIRED_SCOPES",
     ):
         monkeypatch.delenv(var, raising=False)
     for key, value in (oidc_env or {}).items():

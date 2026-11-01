@@ -3,7 +3,7 @@
 <!-- SPECKIT START -->
 For additional context about technologies to be used, project structure,
 shell commands, and other important information, read the current plan:
-specs/003-oidc-provider-fixes/plan.md
+specs/004-oidc-access-tokens/plan.md
 <!-- SPECKIT END -->
 
 <!-- rtk-instructions v2 -->

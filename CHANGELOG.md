@@ -7,36 +7,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-### Breaking changes
-
-- The OIDC login now needs an allowlist. Set `COMFYUI_CURU_AUTH_OIDC_ALLOWED_SUBJECTS`,
-  `_ALLOWED_EMAILS` or `_ALLOWED_DOMAIN`, or `COMFYUI_CURU_AUTH_OIDC_ALLOW_ANY_USER=true`.
-  Without one, the OIDC login stays off and the console says so; the credential
-  gate stays on.
-
 ### Added
 
-- `COMFYUI_CURU_AUTH_OIDC_ALLOWED_SUBJECTS`, `_ALLOWED_EMAILS` (verified emails
-  only), `_ALLOWED_DOMAIN` (the Google Workspace `hd` claim) and `_ALLOW_ANY_USER`.
-- `COMFYUI_CURU_AUTH_OIDC_SCOPES`, with `openid` always included.
-- `docs/oidc-providers.md`: a guide for rauthy, Authentik, Keycloak, Auth0, Okta,
-  Microsoft Entra ID, Google and Authelia.
-- A live test tier with rauthy 0.37.2 and a browser (`uv run --group live pytest -m rauthy`).
-
-### Fixed
-
-- The OIDC login works with an issuer that ends in `/`, as rauthy and Authentik
-  give it. The discovery URL no longer has `//`, and the issuer of the discovery
-  document must equal the configured issuer exactly.
-- ID tokens signed with RS384, RS512, PS256, ES256 and EdDSA are accepted. The
-  key with the `kid` of the token sets the algorithm.
-- `alg: none` and each HMAC algorithm are refused before the keys are read. An
-  HS256 refusal tells the operator to select a signing key on the Authentik provider.
-- Each endpoint of the discovery document must use `https`, or `http` on loopback.
-- An ID token must have `exp` and `iat`, and `azp` must be the client id when the
-  token has more than one audience. The clock leeway is 60 seconds.
-- A refused OIDC login names its reason in the log line, after `oidc callback:`.
-- A release now re-locks `uv.lock`, so it no longer falls one version behind.
+- Resource-server mode: the Bearer path also accepts a short-lived OIDC access
+  token of the configured issuer. Set `COMFYUI_CURU_AUTH_OIDC_AUDIENCE` (with the
+  issuer) to turn it on, and `COMFYUI_CURU_AUTH_OIDC_REQUIRED_SCOPES` to require
+  scopes. Off by default; the static credential does not change.
+- A token must be signed by a key of the issuer (RS256, RS384, RS512, PS256,
+  ES256 or EdDSA), hold the audience, live 1 hour or less, and not be expired
+  (no leeway). A `JWT` token or a token with no `typ` also needs a client id and
+  a scope, so an ID token is refused. The `/ws` handshake gets the same check.
+- The keys of the issuer stay in memory. An unknown `kid` causes one new read, at
+  most once in 60 seconds. A token with a bad shape, another issuer or a refused
+  `alg` causes no read.
+- A refused token counts as one failed attempt and logs
+  `authentication failure from <IP> (<METHOD> <PATH>: token refused: <reason>)`.
+  A valid token passes also during a wait, so the immediate retry of comfy-mcp
+  after a 401 is not a 429.
+- The `rauthy` test tier gets a `client_credentials` token and calls `GET /queue`.
 
 <!-- version list -->
 
@@ -53,6 +41,46 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **oidc**: The OIDC login now needs COMFYUI_CURU_AUTH_OIDC_ALLOWED_SUBJECTS, _ALLOWED_EMAILS,
   _ALLOWED_DOMAIN or _ALLOW_ANY_USER=true. Without one, the OIDC login stays off and only the
   credential works.
+
+### Details
+
+#### Breaking changes
+
+- The OIDC login now needs an allowlist. Set `COMFYUI_CURU_AUTH_OIDC_ALLOWED_SUBJECTS`,
+  `_ALLOWED_EMAILS` or `_ALLOWED_DOMAIN`, or `COMFYUI_CURU_AUTH_OIDC_ALLOW_ANY_USER=true`.
+  Without one, the OIDC login stays off and the console says so; the credential
+  gate stays on.
+
+#### Added
+
+- `COMFYUI_CURU_AUTH_OIDC_ALLOWED_SUBJECTS`, `_ALLOWED_EMAILS` (verified emails
+  only), `_ALLOWED_DOMAIN` (the Google Workspace `hd` claim) and `_ALLOW_ANY_USER`.
+- `COMFYUI_CURU_AUTH_OIDC_SCOPES`, with `openid` always included.
+- `docs/oidc-providers.md`: a guide for rauthy, Authentik, Keycloak, Auth0, Okta,
+  Microsoft Entra ID, Google and Authelia.
+- A live test tier with rauthy 0.37.2 and a browser (`uv run --group live pytest -m rauthy`).
+
+#### Fixed
+
+- The OIDC login works with an issuer that ends in `/`, as rauthy and Authentik
+  give it. The discovery URL no longer has `//`, and the issuer of the discovery
+  document must equal the configured issuer exactly.
+- ID tokens signed with RS384, RS512, PS256, ES256 and EdDSA are accepted. The
+  key with the `kid` of the token sets the algorithm.
+- `alg: none` and each HMAC algorithm are refused before the keys are read. An
+  HS256 refusal tells the operator to select a signing key on the Authentik provider.
+- Each endpoint of the discovery document must use `https`, or `http` on loopback.
+- An ID token must have `exp` and `iat`, and `azp` must be the client id when the
+  token has more than one audience. The clock leeway is 60 seconds.
+- A refused OIDC login names its reason in the log line, after `oidc callback:`.
+- The issuer itself must use `https`, or `http` on loopback; else the OIDC login
+  stays off with a start error.
+- The gate follows no redirect from the discovery URL, the JWKS URL or the token
+  endpoint, so a redirect cannot move the keys to `http` or send the secret on.
+- A malformed JWKS is a refused login (401, log line, wait), not an HTTP 500.
+- A bad discovery document at the start of a login logs
+  `OIDC login unavailable: <reason>` with both issuer values.
+- A release now re-locks `uv.lock`, so it no longer falls one version behind.
 
 
 ## v1.0.1 (2026-10-16)
