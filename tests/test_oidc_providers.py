@@ -1,0 +1,186 @@
+"""Hermetic tests of spec 003: the OIDC login works with rauthy, Authentik and
+other providers (issue #13, ADR-007).
+
+Each test runs the real ``oidc.py`` against :class:`FakeIssuer` on a loopback
+port. The scenario names come from
+``specs/003-oidc-provider-fixes/features/oidc_provider_fixes.feature``.
+"""
+
+from __future__ import annotations
+
+from typing import Any
+from urllib.parse import parse_qs, urlsplit
+
+import pytest
+from aiohttp import ClientResponse, web
+from aiohttp.test_utils import TestClient, TestServer
+
+from gate import LOGIN_PATH, RateLimiter, SessionStore, build_gate_middleware
+from tests.support.fake_issuer import CLIENT_ID, CLIENT_SECRET, FakeIssuer
+
+START = "/curu-auth/oidc/start"
+CALLBACK = "/curu-auth/oidc/callback"
+
+
+async def _home(request: web.Request) -> web.Response:
+    return web.json_response({"ok": True})
+
+
+def _config(issuer: FakeIssuer, **extra: Any) -> Any:
+    from oidc import OIDCConfig
+
+    return OIDCConfig(
+        issuer_url=issuer.issuer,
+        client_id=CLIENT_ID,
+        client_secret=CLIENT_SECRET,
+        redirect_uri=f"http://127.0.0.1{CALLBACK}",
+        **extra,
+    )
+
+
+async def _login(
+    issuer: FakeIssuer,
+    *,
+    rate_limiter: RateLimiter | None = None,
+    **config_extra: Any,
+) -> ClientResponse:
+    """Run start, then the callback, through a real gate. Return the callback."""
+    from oidc import AuthorizationRequestStore, build_oidc_routes
+
+    sessions = SessionStore()
+    start, callback = build_oidc_routes(
+        _config(issuer, **config_extra),
+        sessions=sessions,
+        store=AuthorizationRequestStore(),
+        rate_limiter=rate_limiter,
+    )
+    gate = build_gate_middleware(
+        "static-credential",
+        sessions=sessions,
+        public_paths={LOGIN_PATH, START, CALLBACK},
+    )
+    app = web.Application(middlewares=[gate])
+    app.router.add_get("/", _home)
+    app.router.add_get(START, start)
+    app.router.add_get(CALLBACK, callback)
+    async with TestClient(TestServer(app)) as client:
+        started = await client.get(START, allow_redirects=False)
+        assert started.status == 302, await started.text()
+        query = parse_qs(urlsplit(started.headers["Location"]).query)
+        issuer.nonce = query["nonce"][0]
+        return await client.get(
+            CALLBACK,
+            params={"code": "a-code", "state": query["state"][0]},
+            allow_redirects=False,
+        )
+
+
+def _session_cookie(response: ClientResponse) -> str | None:
+    for value in response.headers.getall("Set-Cookie", []):
+        if value.startswith("curu_auth="):
+            return value.split(";", 1)[0].split("=", 1)[1]
+    return None
+
+
+# --------------------------------------------------------------------------
+# User story 1: log in through rauthy or Authentik.
+# --------------------------------------------------------------------------
+
+
+class TestTheIssuerIsUsedExactly:
+    """Scenarios: An issuer with a slash at the end; The iss of the ID token is
+    the configured issuer; A discovery document that names another issuer."""
+
+    @pytest.mark.parametrize(
+        "issuer",
+        ["http://h/auth/v1/", "http://h/auth/v1", "http://h/auth/v1//"],
+    )
+    def test_the_discovery_url_has_no_double_slash(self, issuer: str) -> None:
+        from oidc import discovery_url
+
+        assert discovery_url(issuer) == (
+            "http://h/auth/v1/.well-known/openid-configuration"
+        )
+
+    async def test_the_document_of_an_issuer_that_ends_in_a_slash_is_read(
+        self,
+    ) -> None:
+        from oidc import fetch_discovery_document
+
+        async with FakeIssuer() as issuer:
+            document = await fetch_discovery_document(issuer.issuer)
+
+        assert document["issuer"] == issuer.issuer
+        assert issuer.issuer.endswith("/")
+
+    async def test_a_document_that_names_another_issuer_is_refused(self) -> None:
+        from oidc import OIDCDiscoveryError, fetch_discovery_document
+
+        async with FakeIssuer() as issuer:
+            issuer.discovery_overrides["issuer"] = issuer.issuer.rstrip("/")
+            with pytest.raises(OIDCDiscoveryError) as refused:
+                await fetch_discovery_document(issuer.issuer)
+
+        # The error names both values, so the operator can copy the right one.
+        assert issuer.issuer in str(refused.value)
+        assert issuer.issuer.rstrip("/") + "'" in str(refused.value)
+
+    async def test_a_login_with_another_issuer_in_the_document_gets_503(
+        self,
+    ) -> None:
+        async with FakeIssuer() as issuer:
+            issuer.discovery_overrides["issuer"] = "https://other.example/"
+            from oidc import AuthorizationRequestStore, build_oidc_routes
+
+            start, _callback = build_oidc_routes(
+                _config(issuer),
+                sessions=SessionStore(),
+                store=AuthorizationRequestStore(),
+            )
+            app = web.Application()
+            app.router.add_get(START, start)
+            async with TestClient(TestServer(app)) as client:
+                response = await client.get(START, allow_redirects=False)
+
+        assert response.status == 503
+
+    async def test_a_login_through_an_issuer_that_ends_in_a_slash_works(
+        self,
+    ) -> None:
+        async with FakeIssuer() as issuer:
+            response = await _login(issuer)
+
+        assert response.status == 302, await response.text()
+        assert _session_cookie(response)
+
+    async def test_a_login_through_an_issuer_with_no_slash_works(self) -> None:
+        async with FakeIssuer(trailing_slash=False) as issuer:
+            response = await _login(issuer)
+
+        assert response.status == 302, await response.text()
+        assert _session_cookie(response)
+
+    async def test_an_iss_without_the_slash_of_the_issuer_is_refused(self) -> None:
+        async with FakeIssuer() as issuer:
+            issuer.login_claims["iss"] = issuer.issuer.rstrip("/")
+            response = await _login(issuer)
+
+        assert response.status == 401
+        assert _session_cookie(response) is None
+
+
+class TestTheKeySetsTheAlgorithm:
+    """Scenario: An EdDSA ID token. ES256 and RS256 too, and a JWK with no
+    ``alg``, where the key type sets the algorithm."""
+
+    @pytest.mark.parametrize("publish_alg", [True, False])
+    @pytest.mark.parametrize("kid", ["rsa-1", "ec-1", "ed-1"])
+    async def test_the_gate_accepts_the_token(
+        self, kid: str, publish_alg: bool
+    ) -> None:
+        async with FakeIssuer(publish_alg=publish_alg) as issuer:
+            issuer.login_kid = kid
+            response = await _login(issuer)
+
+        assert response.status == 302, await response.text()
+        assert _session_cookie(response)
