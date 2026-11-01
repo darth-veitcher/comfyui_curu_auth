@@ -18,14 +18,12 @@ description: "Task list for 004-oidc-access-tokens"
 ## Phase 1: Setup
 
 - [x] T001 Write the settings names, the checks and the rate-limit rule in `project-management/ADRs/ADR-008-oidc-access-tokens-on-the-bearer-path.md`.
-- [ ] T002 Add an access-token helper to `tests/support/fake_issuer.py`.
+- [x] T002 Add an access-token helper to `tests/support/fake_issuer.py`.
 
 ## Phase 2: User Story 3 and User Story 4 - The token check and the key cache (P1, P2)
 
-- [ ] T003-T [US3] Write failing tests for each check of ADR-008 in `tests/test_oidc_access_tokens.py`.
-- [ ] T003-I [US3] Add `verify_access_token` to `oidc.py`.
-- [ ] T004-T [US4] Write failing tests for the key cache, the key rotation and the 60-second limit in `tests/test_oidc_access_tokens.py`.
-- [ ] T004-I [US4] Add `IssuerKeys` to `oidc.py`.
+- [x] T003-T [US3, US4] Write failing tests for each check of ADR-008 and for the key cache in `tests/test_oidc_access_tokens.py`.
+- [ ] T003-I [US3, US4] Add `IssuerKeys` and `verify_access_token` to `oidc.py`. The check needs the cache, so the two are one pair.
 
 ## Phase 3: User Story 1, User Story 3 and User Story 5 - The gate (P1, P2)
 
