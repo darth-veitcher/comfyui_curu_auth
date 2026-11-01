@@ -212,13 +212,13 @@ client_secret_env = "GATED_OIDC_SECRET"
 resource = "https://comfyui.example.com"
 ```
 
-Set `COMFYUI_CURU_AUTH_OIDC_AUDIENCE` of the gate to the same URL as `resource`. Put the client secret in the variable that `client_secret_env` names. The README of comfy-mcp gives the keys for the other providers.
+Set `COMFYUI_CURU_AUTH_OIDC_AUDIENCE` of the gate to the same URL as `resource`. Put the client secret in the variable that `client_secret_env` names.
 
 | Fact | Source |
 |---|---|
-| comfy-mcp 0.1.0 with this table reads the queue through the gate. | Tested live (rauthy 0.37.2) |
+| comfy-mcp 0.1.0 with this table reads the queue through the gate, with its own token. `list_backends` shows the backend as online. | Tested live (rauthy 0.37.2) |
 | comfy-mcp sends the same token on the `/ws` handshake, and the gate lets it through. | Tested live (rauthy 0.37.2) |
-| With a token for another resource, each tool gives `backend_auth_failed`, not `backend_rate_limited`. comfy-mcp tries one more time after the 401, and the gate checks that token also during its wait. | Tested live (rauthy 0.37.2) |
+| With a token for another resource, `get_queue` gives `backend_auth_failed`, not `backend_rate_limited`. The gate refuses the first try and the one retry of comfy-mcp for the wrong audience. The retry falls in the wait of the gate and still gets 401. | Tested live (rauthy 0.37.2) |
 
 ## Fix a login or an access token that fails
 
