@@ -71,6 +71,8 @@ class FakeIssuer:
         self.login_kid = "rsa-1"
         #: The nonce of the last authorization request. A test copies it here.
         self.nonce = "fake-nonce"
+        #: A body that replaces the JWKS, for a test of a malformed key set.
+        self.jwks_override: Any = None
         self._server: TestServer | None = None
 
     def add_key(self, kid: str, alg: str) -> None:
@@ -130,7 +132,16 @@ class FakeIssuer:
 
         async def jwks(request: web.Request) -> web.Response:
             self.jwks_reads += 1
+            if self.jwks_override is not None:
+                return web.json_response(self.jwks_override)
             return web.json_response(self.jwks())
+
+        async def redirect_to_jwks(request: web.Request) -> web.Response:
+            raise web.HTTPFound("/issuer/jwks")
+
+        async def redirect_to_token(request: web.Request) -> web.Response:
+            # 307 keeps the method and the body: the client secret goes along.
+            raise web.HTTPTemporaryRedirect("/issuer/token")
 
         async def token(request: web.Request) -> web.Response:
             form = await request.post()
@@ -145,6 +156,8 @@ class FakeIssuer:
         app.router.add_get("/issuer/.well-known/openid-configuration", discovery)
         app.router.add_get("/issuer/jwks", jwks)
         app.router.add_post("/issuer/token", token)
+        app.router.add_get("/issuer/jwks-moved", redirect_to_jwks)
+        app.router.add_post("/issuer/token-moved", redirect_to_token)
         return app
 
     def claims(self, **claims: Any) -> dict[str, Any]:
@@ -162,13 +175,20 @@ class FakeIssuer:
         return {name: value for name, value in body.items() if value is not None}
 
     def id_token(
-        self, *, kid: str = "rsa-1", header: dict[str, Any] | None = None, **claims: Any
+        self,
+        *,
+        kid: str = "rsa-1",
+        header: dict[str, Any] | None = None,
+        sign_alg: str | None = None,
+        **claims: Any,
     ) -> str:
         """An ID token signed with the key ``kid``.
 
-        ``header`` replaces fields of the header.
+        ``header`` replaces fields of the header. ``sign_alg`` signs with
+        another algorithm of the same key type, and names it in the header.
         """
         alg, key = self.keys[kid]
+        alg = sign_alg or alg
         protected = {"alg": alg, "kid": kid, "typ": "JWT", **(header or {})}
         with warnings.catch_warnings():
             warnings.simplefilter("ignore", SecurityWarning)

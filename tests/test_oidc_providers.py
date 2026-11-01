@@ -190,6 +190,17 @@ class TestTheKeySetsTheAlgorithm:
         assert response.status == 302, await response.text()
         assert _session_cookie(response)
 
+    @pytest.mark.parametrize("alg", ["RS384", "RS512", "PS256"])
+    async def test_each_other_allowed_rsa_algorithm_logs_in(self, alg: str) -> None:
+        """These need ``alg`` in the JWK: an RSA key alone means RS256."""
+        async with FakeIssuer() as issuer:
+            issuer.add_key("rsa-x", alg)
+            issuer.login_kid = "rsa-x"
+            response = await _login(issuer)
+
+        assert response.status == 302, await response.text()
+        assert _session_cookie(response)
+
 
 # --------------------------------------------------------------------------
 # User story 3: the gate refuses an unsafe provider or token.
@@ -266,11 +277,14 @@ class TestTheGateRefusesUnsafeAlgorithms:
         from oidc import OIDCTokenVerificationError
 
         async with FakeIssuer() as issuer:
-            issuer.add_key("rsa-2", "RS384")
-            # Signed with RS384, but the header names the RS256 key.
-            token = issuer.id_token(kid="rsa-2", header={"kid": "rsa-1"})
-            with pytest.raises(OIDCTokenVerificationError):
+            # A valid RS384 signature by the private key of "rsa-1", whose JWK
+            # says RS256. A gate that trusted the header would accept it; only
+            # the rule "the header alg is the key alg" refuses it.
+            token = issuer.id_token(kid="rsa-1", sign_alg="RS384")
+            with pytest.raises(OIDCTokenVerificationError) as refused:
                 await _verify(issuer, token)
+
+        assert "not the key algorithm" in refused.value.reason
 
     async def test_an_unknown_kid_is_refused(self) -> None:
         from oidc import OIDCTokenVerificationError
@@ -730,3 +744,150 @@ class TestTheScopes:
         assert response.status == 302
         query = parse_qs(urlsplit(response.headers["Location"]).query)
         assert query["scope"] == ["openid profile groups"]
+
+
+# --------------------------------------------------------------------------
+# Review of spec 003: the issuer scheme, a bad key set, redirects, the log.
+# --------------------------------------------------------------------------
+
+
+class TestTheIssuerMustUseHttps:
+    """The discovery document comes from the issuer, so the issuer itself needs
+    the same https rule as the endpoints in it."""
+
+    @pytest.mark.parametrize(
+        "issuer", ["http://idp.lan/", "http://10.0.0.5/auth/v1/", "ftp://idp/"]
+    )
+    def test_an_http_issuer_off_loopback_is_a_setup_error(self, issuer: str) -> None:
+        from oidc import OIDCConfigError, resolve_oidc_config
+
+        with pytest.raises(OIDCConfigError) as refused:
+            resolve_oidc_config(
+                **{**_FULL, "issuer_url": issuer}, allow_any_user="true"
+            )
+
+        assert "https" in str(refused.value)
+
+    @pytest.mark.parametrize(
+        "issuer",
+        [
+            "https://idp.example.com/",
+            "http://127.0.0.1:8080/auth/v1/",
+            "http://localhost/",
+        ],
+    )
+    def test_https_and_loopback_issuers_are_accepted(self, issuer: str) -> None:
+        from oidc import resolve_oidc_config
+
+        config = resolve_oidc_config(
+            **{**_FULL, "issuer_url": issuer}, allow_any_user="true"
+        )
+        assert config is not None
+        assert config.issuer_url == issuer
+
+
+class TestABadKeySetIsARefusedLogin:
+    """A malformed JWKS must give 401, a failure log line and a backoff, not 500."""
+
+    @pytest.mark.parametrize(
+        "jwks",
+        [
+            {"keys": [{"kty": "nonsense", "kid": "rsa-1"}]},
+            {"keys": [{"kty": "RSA", "kid": "rsa-1"}]},
+            [],
+            {},
+            "not a key set",
+        ],
+    )
+    async def test_the_callback_refuses_and_logs(
+        self, jwks: Any, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        limiter = RateLimiter()
+        async with FakeIssuer() as issuer:
+            issuer.jwks_override = jwks
+            with caplog.at_level("WARNING", logger="comfyui_curu_auth"):
+                response = await _login(issuer, rate_limiter=limiter)
+
+        assert response.status == 401
+        assert any(
+            "authentication failure from 127.0.0.1 (oidc callback: " in r.getMessage()
+            and "id_token" not in r.getMessage()
+            for r in caplog.records
+        ), [r.getMessage() for r in caplog.records]
+        assert limiter.seconds_until_retry("127.0.0.1") > 0
+
+
+class TestTheGateFollowsNoRedirect:
+    """A redirect could move a request to plain http, or send the client secret
+    to another host."""
+
+    async def test_a_jwks_uri_that_redirects_is_refused(self) -> None:
+        async with FakeIssuer() as issuer:
+            issuer.discovery_overrides["jwks_uri"] = (
+                f"{issuer.base_url}/issuer/jwks-moved"
+            )
+            response = await _login(issuer)
+
+        assert response.status == 401
+
+    async def test_a_token_endpoint_that_redirects_gets_no_secret(self) -> None:
+        async with FakeIssuer() as issuer:
+            issuer.discovery_overrides["token_endpoint"] = (
+                f"{issuer.base_url}/issuer/token-moved"
+            )
+            response = await _login(issuer)
+
+        assert response.status == 401
+
+
+class TestTheReasonHoldsNoTokenData:
+    async def test_an_hmac_alg_with_a_line_break_cannot_forge_a_log_line(
+        self,
+    ) -> None:
+        import base64
+        import json
+
+        from oidc import OIDCTokenVerificationError
+
+        async with FakeIssuer() as issuer:
+            _header, _, rest = issuer.id_token().partition(".")
+            header = json.dumps({"alg": "HS256\nforged line", "kid": "rsa-1"}).encode()
+            forged = base64.urlsafe_b64encode(header).rstrip(b"=").decode()
+            with pytest.raises(OIDCTokenVerificationError) as refused:
+                await _verify(issuer, f"{forged}.{rest}")
+
+        assert "\n" not in refused.value.reason
+        assert "forged" not in refused.value.reason
+
+
+class TestABadDiscoveryDocumentIsLoggedAtStart:
+    """The start route gives 503 for a bad discovery document. The operator
+    must see why in the log, with both issuer values."""
+
+    async def test_the_start_route_logs_the_two_issuers(
+        self, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        from oidc import AuthorizationRequestStore, build_oidc_routes
+
+        async with FakeIssuer() as issuer:
+            configured = issuer.issuer
+            issuer.discovery_overrides["issuer"] = configured.rstrip("/")
+            start, _callback = build_oidc_routes(
+                _config(issuer),
+                sessions=SessionStore(),
+                store=AuthorizationRequestStore(),
+            )
+            app = web.Application()
+            app.router.add_get(START, start)
+            with caplog.at_level("ERROR", logger="comfyui_curu_auth"):
+                async with TestClient(TestServer(app)) as client:
+                    response = await client.get(START, allow_redirects=False)
+
+        assert response.status == 503
+        messages = [r.getMessage() for r in caplog.records if r.levelname == "ERROR"]
+        assert any(
+            repr(configured) in m and repr(configured.rstrip("/")) in m
+            for m in messages
+        ), messages
+        # Not an authentication failure: fail2ban must not ban for a setup error.
+        assert not any("authentication failure" in m for m in messages)
