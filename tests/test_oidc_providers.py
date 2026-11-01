@@ -27,8 +27,11 @@ async def _home(request: web.Request) -> web.Response:
 
 
 def _config(issuer: FakeIssuer, **extra: Any) -> Any:
-    from oidc import OIDCConfig
+    """A config for ``issuer``. Unless a test gives an allowlist, any user may
+    log in: most tests here are about the provider, not about who logs in."""
+    from oidc import LoginAllowlist, OIDCConfig
 
+    extra.setdefault("allowlist", LoginAllowlist(allow_any=True))
     return OIDCConfig(
         issuer_url=issuer.issuer,
         client_id=CLIENT_ID,
@@ -404,3 +407,245 @@ class TestTheClaimsOfAnIdToken:
             else:
                 with pytest.raises(OIDCTokenVerificationError):
                     await _verify(issuer, token)
+
+
+# --------------------------------------------------------------------------
+# User story 2: only the allowed people get a session.
+# --------------------------------------------------------------------------
+
+
+def _allowlist(**fields: Any) -> Any:
+    from oidc import LoginAllowlist
+
+    return LoginAllowlist(**fields)
+
+
+class TestTheAllowlist:
+    """Scenarios: A listed subject; A subject that is not listed; An email that
+    is not verified; An allowed domain; Any user."""
+
+    @pytest.mark.parametrize(
+        ("fields", "claims", "permitted"),
+        [
+            ({"subjects": frozenset({"user-1"})}, {"sub": "user-1"}, True),
+            ({"subjects": frozenset({"user-1"})}, {"sub": "user-2"}, False),
+            ({"subjects": frozenset({"user-1"})}, {"sub": "USER-1"}, False),
+            (
+                {"emails": frozenset({"ann@example.com"})},
+                {"sub": "x", "email": "Ann@Example.com", "email_verified": True},
+                True,
+            ),
+            (
+                {"emails": frozenset({"ann@example.com"})},
+                {"sub": "x", "email": "ann@example.com", "email_verified": False},
+                False,
+            ),
+            (
+                {"emails": frozenset({"ann@example.com"})},
+                {"sub": "x", "email": "ann@example.com"},
+                False,
+            ),
+            (
+                {"emails": frozenset({"ann@example.com"})},
+                {"sub": "x", "email": "ann@example.com", "email_verified": "true"},
+                True,
+            ),
+            ({"domain": "example.com"}, {"sub": "x", "hd": "Example.com"}, True),
+            ({"domain": "example.com"}, {"sub": "x", "hd": "evil.com"}, False),
+            (
+                {"domain": "example.com"},
+                {"sub": "x", "email": "a@example.com", "email_verified": True},
+                False,
+            ),
+            ({"allow_any": True}, {"sub": "anyone"}, True),
+            ({}, {"sub": "anyone"}, False),
+        ],
+    )
+    def test_permits(
+        self, fields: dict[str, Any], claims: dict[str, Any], permitted: bool
+    ) -> None:
+        assert _allowlist(**fields).permits(claims) is permitted
+
+    async def test_a_listed_subject_gets_a_session(self) -> None:
+        async with FakeIssuer() as issuer:
+            issuer.login_claims = {"sub": "user-1"}
+            response = await _login(
+                issuer, allowlist=_allowlist(subjects=frozenset({"user-1"}))
+            )
+
+        assert response.status == 302
+        assert _session_cookie(response)
+
+    async def test_a_subject_that_is_not_listed_gets_401_a_log_line_and_a_backoff(
+        self, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        limiter = RateLimiter()
+        async with FakeIssuer() as issuer:
+            issuer.login_claims = {"sub": "intruder"}
+            with caplog.at_level("WARNING", logger="comfyui_curu_auth"):
+                response = await _login(
+                    issuer,
+                    rate_limiter=limiter,
+                    allowlist=_allowlist(subjects=frozenset({"user-1"})),
+                )
+
+        assert response.status == 401
+        assert _session_cookie(response) is None
+        lines = [r.getMessage() for r in caplog.records]
+        assert any(
+            line.startswith("comfyui_curu_auth: authentication failure from 127.0.0.1")
+            and "not on the allowlist" in line
+            for line in lines
+        ), lines
+        # The log line names no subject: the reason only.
+        assert not any("intruder" in line for line in lines)
+        assert limiter.seconds_until_retry("127.0.0.1") > 0
+
+    async def test_an_email_that_is_not_verified_gets_401(self) -> None:
+        async with FakeIssuer() as issuer:
+            issuer.login_claims = {
+                "sub": "x",
+                "email": "ann@example.com",
+                "email_verified": False,
+            }
+            response = await _login(
+                issuer, allowlist=_allowlist(emails=frozenset({"ann@example.com"}))
+            )
+
+        assert response.status == 401
+
+    async def test_an_allowed_domain_gets_a_session(self) -> None:
+        async with FakeIssuer() as issuer:
+            issuer.login_claims = {"sub": "x", "hd": "example.com"}
+            response = await _login(issuer, allowlist=_allowlist(domain="example.com"))
+
+        assert response.status == 302
+        assert _session_cookie(response)
+
+    async def test_with_no_allowlist_in_the_config_nobody_gets_a_session(
+        self,
+    ) -> None:
+        from oidc import LoginAllowlist, OIDCConfig
+
+        assert (
+            OIDCConfig(
+                issuer_url="https://idp.example.com/",
+                client_id=CLIENT_ID,
+                client_secret=CLIENT_SECRET,
+                redirect_uri="https://h/cb",
+            ).allowlist
+            == LoginAllowlist()
+        )
+        async with FakeIssuer() as issuer:
+            response = await _login(issuer, allowlist=LoginAllowlist())
+
+        assert response.status == 401
+
+
+_FULL = {
+    "issuer_url": "https://idp.example.com/",
+    "client_id": CLIENT_ID,
+    "client_secret": CLIENT_SECRET,
+    "redirect_uri": "https://h/curu-auth/oidc/callback",
+}
+
+
+class TestTheSettingsOfTheAllowlist:
+    """Scenario: No allowlist (the resolver half)."""
+
+    def test_a_full_setup_with_no_allowlist_is_an_error(self) -> None:
+        from oidc import OIDCConfigError, resolve_oidc_config
+
+        with pytest.raises(OIDCConfigError) as refused:
+            resolve_oidc_config(**_FULL)
+
+        assert "COMFYUI_CURU_AUTH_OIDC_ALLOWED_SUBJECTS" in str(refused.value)
+        assert "COMFYUI_CURU_AUTH_OIDC_ALLOW_ANY_USER=true" in str(refused.value)
+
+    @pytest.mark.parametrize("value", ["false", "1", "yes", "", " "])
+    def test_only_true_lets_any_user_in(self, value: str) -> None:
+        from oidc import OIDCConfigError, resolve_oidc_config
+
+        with pytest.raises(OIDCConfigError):
+            resolve_oidc_config(**_FULL, allow_any_user=value)
+
+    @pytest.mark.parametrize("value", ["true", "TRUE", " True "])
+    def test_true_lets_any_user_in(self, value: str) -> None:
+        from oidc import resolve_oidc_config
+
+        config = resolve_oidc_config(**_FULL, allow_any_user=value)
+        assert config is not None
+        assert config.allowlist.allow_any is True
+
+    def test_the_lists_are_read_with_commas_and_spaces(self) -> None:
+        from oidc import resolve_oidc_config
+
+        config = resolve_oidc_config(
+            **_FULL,
+            allowed_subjects=" a , b,,c ",
+            allowed_emails="Ann@Example.com, bob@example.com",
+            allowed_domain=" Example.com ",
+        )
+
+        assert config is not None
+        assert config.allowlist.subjects == frozenset({"a", "b", "c"})
+        assert config.allowlist.emails == frozenset(
+            {"ann@example.com", "bob@example.com"}
+        )
+        assert config.allowlist.domain == "example.com"
+        assert config.allowlist.allow_any is False
+
+    def test_a_partial_setup_is_still_unconfigured(self) -> None:
+        from oidc import resolve_oidc_config
+
+        partial = {**_FULL, "client_secret": ""}
+        assert resolve_oidc_config(**partial, allow_any_user="true") is None
+
+
+class TestStartWithNoAllowlist:
+    """Scenario: No allowlist. ComfyUI starts, the OIDC routes do not exist,
+    and the credential gate stays on."""
+
+    def test_no_oidc_route_and_the_gate_stays_on(
+        self, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        from tests.test_oidc import _load_init_with_fake_server, _registered_paths
+
+        with caplog.at_level("ERROR", logger="comfyui_curu_auth"):
+            app = _load_init_with_fake_server(
+                monkeypatch,
+                oidc_env={
+                    "COMFYUI_CURU_AUTH_OIDC_ISSUER_URL": "https://idp.example.com/",
+                    "COMFYUI_CURU_AUTH_OIDC_CLIENT_ID": CLIENT_ID,
+                    "COMFYUI_CURU_AUTH_OIDC_CLIENT_SECRET": CLIENT_SECRET,
+                    "COMFYUI_CURU_AUTH_OIDC_REDIRECT_URI": "https://h/cb",
+                },
+            )
+
+        paths = _registered_paths(app)
+        assert START not in paths
+        assert CALLBACK not in paths
+        assert LOGIN_PATH in paths
+        assert len(app.middlewares) == 1
+        assert any(
+            "COMFYUI_CURU_AUTH_OIDC_ALLOW_ANY_USER" in r.getMessage()
+            for r in caplog.records
+        )
+
+    def test_an_allowlist_turns_the_login_on(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        from tests.test_oidc import _load_init_with_fake_server, _registered_paths
+
+        app = _load_init_with_fake_server(
+            monkeypatch,
+            oidc_env={
+                "COMFYUI_CURU_AUTH_OIDC_ISSUER_URL": "https://idp.example.com/",
+                "COMFYUI_CURU_AUTH_OIDC_CLIENT_ID": CLIENT_ID,
+                "COMFYUI_CURU_AUTH_OIDC_CLIENT_SECRET": CLIENT_SECRET,
+                "COMFYUI_CURU_AUTH_OIDC_REDIRECT_URI": "https://h/cb",
+                "COMFYUI_CURU_AUTH_OIDC_ALLOWED_SUBJECTS": "user-1",
+            },
+        )
+
+        assert {START, CALLBACK} <= _registered_paths(app)

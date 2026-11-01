@@ -112,6 +112,7 @@ class TestResolveOidcConfig:
             client_id="comfyui-curu-auth",
             client_secret="s3cr3t",
             redirect_uri="https://host/curu-auth/oidc/callback",
+            allow_any_user="true",
         )
         assert config is not None
         assert config.issuer_url == "https://idp.example.com"
@@ -639,6 +640,18 @@ class TestVerifyIdToken:
 _CALLBACK_PATH = "/curu-auth/oidc/callback"
 
 
+def _any_user():
+    """The allowlist that lets each person in (spec 003, ADR-007).
+
+    These tests are about the flow of spec 002, not about who may log in, so
+    each one states this choice instead of relying on a default.
+    """
+
+    from oidc import LoginAllowlist
+
+    return LoginAllowlist(allow_any=True)
+
+
 def _mock_provider_app(key, holder: dict) -> web.Application:
     """A mocked OIDC provider serving discovery/JWKS/token -- ``holder``
     is filled in lazily (base_url isn't known until the TestServer
@@ -717,6 +730,7 @@ class TestOidcCallbackHandler:
                 client_id=_CLIENT_ID,
                 client_secret="s3cr3t",
                 redirect_uri=f"https://comfyui.example{_CALLBACK_PATH}",
+                allowlist=_any_user(),
             )
             store = AuthorizationRequestStore()
             sessions = SessionStore()
@@ -765,6 +779,7 @@ class TestOidcCallbackHandler:
                 client_id=_CLIENT_ID,
                 client_secret="s3cr3t",
                 redirect_uri=f"https://comfyui.example{_CALLBACK_PATH}",
+                allowlist=_any_user(),
             )
             store = AuthorizationRequestStore()
             sessions = SessionStore()
@@ -832,6 +847,7 @@ class TestOidcCallbackHandler:
                 client_id=_CLIENT_ID,
                 client_secret="s3cr3t",
                 redirect_uri=f"https://comfyui.example{_CALLBACK_PATH}",
+                allowlist=_any_user(),
             )
             store = AuthorizationRequestStore()
             sessions = SessionStore()
@@ -972,6 +988,7 @@ class TestOidcCallbackCookieFollowsTheScheme:
                 client_id=_CLIENT_ID,
                 client_secret="s3cr3t",
                 redirect_uri=f"http://comfyui.lan:8188{_CALLBACK_PATH}",
+                allowlist=_any_user(),
             )
             store = AuthorizationRequestStore()
             in_flight = store.create()
@@ -1048,6 +1065,7 @@ class TestOidcStartRouteIsRateLimitedAndCapped:
                 client_id=_CLIENT_ID,
                 client_secret="s3cr3t",
                 redirect_uri="https://comfyui.example/curu-auth/oidc/callback",
+                allowlist=_any_user(),
             )
             store = AuthorizationRequestStore()
             sessions = SessionStore()
@@ -1084,6 +1102,7 @@ class TestOidcStartRouteIsRateLimitedAndCapped:
                 client_id=_CLIENT_ID,
                 client_secret="s3cr3t",
                 redirect_uri="https://comfyui.example/curu-auth/oidc/callback",
+                allowlist=_any_user(),
             )
             store = AuthorizationRequestStore()
             sessions = SessionStore()
@@ -1113,6 +1132,7 @@ class TestOidcStartRouteIsRateLimitedAndCapped:
                 client_id=_CLIENT_ID,
                 client_secret="s3cr3t",
                 redirect_uri="https://comfyui.example/curu-auth/oidc/callback",
+                allowlist=_any_user(),
             )
             store = AuthorizationRequestStore(max_size=3)
             sessions = SessionStore()
@@ -1161,6 +1181,7 @@ class TestSharedRateLimiterDoesNotSelfBlockALegitimateLogin:
                 client_id=_CLIENT_ID,
                 client_secret="s3cr3t",
                 redirect_uri=f"https://comfyui.example{_CALLBACK_PATH}",
+                allowlist=_any_user(),
             )
             store = AuthorizationRequestStore()
             sessions = SessionStore()
@@ -1230,6 +1251,11 @@ def _load_init_with_fake_server(
         "COMFYUI_CURU_AUTH_OIDC_CLIENT_ID",
         "COMFYUI_CURU_AUTH_OIDC_CLIENT_SECRET",
         "COMFYUI_CURU_AUTH_OIDC_REDIRECT_URI",
+        "COMFYUI_CURU_AUTH_OIDC_ALLOWED_SUBJECTS",
+        "COMFYUI_CURU_AUTH_OIDC_ALLOWED_EMAILS",
+        "COMFYUI_CURU_AUTH_OIDC_ALLOWED_DOMAIN",
+        "COMFYUI_CURU_AUTH_OIDC_ALLOW_ANY_USER",
+        "COMFYUI_CURU_AUTH_OIDC_SCOPES",
     ):
         monkeypatch.delenv(var, raising=False)
     for key, value in (oidc_env or {}).items():
@@ -1302,6 +1328,7 @@ class TestInitPyWiringIsOidcAware:
                 "COMFYUI_CURU_AUTH_OIDC_REDIRECT_URI": (
                     "https://comfyui.example/curu-auth/oidc/callback"
                 ),
+                "COMFYUI_CURU_AUTH_OIDC_ALLOW_ANY_USER": "true",
             },
         )
 
@@ -1332,6 +1359,7 @@ class TestInitPyWiringIsOidcAware:
                 "COMFYUI_CURU_AUTH_OIDC_REDIRECT_URI": (
                     "https://comfyui.example/curu-auth/oidc/callback"
                 ),
+                "COMFYUI_CURU_AUTH_OIDC_ALLOW_ANY_USER": "true",
             },
         )
 
