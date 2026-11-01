@@ -27,7 +27,7 @@ description: "Task list for 004-oidc-access-tokens"
 
 ## Phase 3: User Story 1, User Story 3 and User Story 5 - The gate (P1, P2)
 
-- [ ] T005-T [US1] Write failing tests for the Bearer path, `/ws`, the log line and the rate limit in `tests/test_oidc_access_tokens.py`.
+- [x] T005-T [US1] Write failing tests for the Bearer path, `/ws`, the log line and the rate limit in `tests/test_oidc_access_tokens.py`.
 - [ ] T005-I [US1] Add the `token_check` parameter to `build_gate_middleware` in `gate.py`.
 
 ## Phase 4: User Story 2 - The settings (P1)

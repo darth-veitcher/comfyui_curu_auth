@@ -352,3 +352,265 @@ class TestTheKeysStayInMemory:
                 )
 
         assert refused.value.reason == "issuer not available"
+
+
+# --------------------------------------------------------------------------
+# User stories 1, 2, 3 and 5: the token check on the gate, also on /ws.
+# --------------------------------------------------------------------------
+
+STATIC = "static-credential"
+
+
+async def _queue(request: Any) -> Any:
+    from aiohttp import web
+
+    return web.json_response({"queue_running": []})
+
+
+async def _ws(request: Any) -> Any:
+    from aiohttp import web
+
+    socket = web.WebSocketResponse()
+    await socket.prepare(request)
+    await socket.send_str("hello")
+    await socket.close()
+    return socket
+
+
+def _gate_app(
+    issuer: FakeIssuer,
+    *,
+    limiter: Any = None,
+    static: str = STATIC,
+    token_check: Any = "default",
+) -> Any:
+    from aiohttp import web
+
+    from gate import SessionStore, build_gate_middleware
+    from oidc import IssuerKeys, build_token_check
+
+    if token_check == "default":
+        token_check = build_token_check(_config(issuer), IssuerKeys(issuer.issuer))
+    app = web.Application(
+        middlewares=[
+            build_gate_middleware(
+                static,
+                sessions=SessionStore(),
+                rate_limiter=limiter,
+                token_check=token_check,
+            )
+        ]
+    )
+    app.router.add_get("/queue", _queue)
+    app.router.add_get("/ws", _ws)
+    return app
+
+
+def _bearer(token: str) -> dict[str, str]:
+    return {"Authorization": f"Bearer {token}"}
+
+
+class TestTheGateAcceptsAccessTokens:
+    """Scenarios: A valid access token; The static credential with the mode on;
+    The ws handshake with a valid token; The ws handshake with a refused token."""
+
+    async def test_a_valid_token_gets_the_answer(self) -> None:
+        from aiohttp.test_utils import TestClient, TestServer
+
+        async with (
+            FakeIssuer() as issuer,
+            TestClient(TestServer(_gate_app(issuer))) as client,
+        ):
+            response = await client.get(
+                "/queue", headers=_bearer(issuer.access_token())
+            )
+            status = response.status
+
+        assert status == 200
+
+    async def test_the_static_credential_still_works(self) -> None:
+        from aiohttp.test_utils import TestClient, TestServer
+
+        async with (
+            FakeIssuer() as issuer,
+            TestClient(TestServer(_gate_app(issuer))) as client,
+        ):
+            good = await client.get("/queue", headers=_bearer(STATIC))
+            wrong = await client.get("/queue", headers=_bearer("wrong"))
+            statuses = (good.status, wrong.status)
+
+        assert statuses == (200, 401)
+
+    async def test_a_static_credential_with_dots_never_reaches_the_token_check(
+        self,
+    ) -> None:
+        from aiohttp.test_utils import TestClient, TestServer
+
+        calls: list[str] = []
+
+        async def spy(token: str) -> str | None:
+            calls.append(token)
+            return "refused"
+
+        async with FakeIssuer() as issuer:
+            app = _gate_app(issuer, static="a.b.c", token_check=spy)
+            async with TestClient(TestServer(app)) as client:
+                response = await client.get("/queue", headers=_bearer("a.b.c"))
+                status = response.status
+
+        assert status == 200
+        assert calls == []
+
+    async def test_with_the_mode_off_a_valid_token_gets_401(self) -> None:
+        from aiohttp.test_utils import TestClient, TestServer
+
+        async with FakeIssuer() as issuer:
+            app = _gate_app(issuer, token_check=None)
+            async with TestClient(TestServer(app)) as client:
+                response = await client.get(
+                    "/queue", headers=_bearer(issuer.access_token())
+                )
+                status = response.status
+
+        assert status == 401
+
+    async def test_the_ws_handshake_with_a_valid_token(self) -> None:
+        from aiohttp.test_utils import TestClient, TestServer
+
+        async with (
+            FakeIssuer() as issuer,
+            TestClient(TestServer(_gate_app(issuer))) as client,
+        ):
+            socket = await client.ws_connect(
+                "/ws", headers=_bearer(issuer.access_token())
+            )
+            message = await socket.receive_str()
+            await socket.close()
+
+        assert message == "hello"
+
+    async def test_the_ws_handshake_with_a_refused_token_gets_401(self) -> None:
+        import aiohttp
+        from aiohttp.test_utils import TestClient, TestServer
+
+        async with (
+            FakeIssuer() as issuer,
+            TestClient(TestServer(_gate_app(issuer))) as client,
+        ):
+            with pytest.raises(aiohttp.WSServerHandshakeError) as refused:
+                await client.ws_connect(
+                    "/ws", headers=_bearer(issuer.access_token(aud="other"))
+                )
+
+        assert refused.value.status == 401
+
+
+class TestARefusedTokenCountsAndIsLogged:
+    """Scenarios: The log line of a refused token; A refused token counts;
+    comfy-mcp retries after a 401; Two refused tokens."""
+
+    async def test_the_log_line_names_the_reason_and_no_token(
+        self, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        from aiohttp.test_utils import TestClient, TestServer
+
+        from gate import RateLimiter
+
+        limiter = RateLimiter()
+        now = int(time.time())
+        async with FakeIssuer() as issuer:
+            token = issuer.access_token(issued=now - 400, lifetime=300)
+            with caplog.at_level("DEBUG", logger="comfyui_curu_auth"):
+                async with TestClient(
+                    TestServer(_gate_app(issuer, limiter=limiter))
+                ) as c:
+                    response = await c.get("/queue", headers=_bearer(token))
+                    status = response.status
+
+        messages = [r.getMessage() for r in caplog.records]
+        assert status == 401
+        assert (
+            "comfyui_curu_auth: authentication failure from 127.0.0.1 "
+            "(GET /queue: token refused: expired)"
+        ) in messages
+        for part in token.split("."):
+            assert not any(part in m for m in messages)
+        assert limiter.seconds_until_retry("127.0.0.1") > 0
+
+    async def test_an_accepted_token_logs_its_client_and_subject_at_debug(
+        self, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        from aiohttp.test_utils import TestClient, TestServer
+
+        async with FakeIssuer() as issuer:
+            token = issuer.access_token(sub="svc-account")
+            with caplog.at_level("DEBUG", logger="comfyui_curu_auth"):
+                async with TestClient(TestServer(_gate_app(issuer))) as c:
+                    await c.get("/queue", headers=_bearer(token))
+
+        debug = [r.getMessage() for r in caplog.records if r.levelname == "DEBUG"]
+        assert any(PROGRAM_ID in m and "svc-account" in m for m in debug), debug
+        for part in token.split("."):
+            assert not any(part in m for m in debug)
+
+    async def test_a_valid_token_right_after_a_refused_one_passes(self) -> None:
+        """comfy-mcp gets a new token after a 401 and retries at once."""
+        from aiohttp.test_utils import TestClient, TestServer
+
+        from gate import RateLimiter
+
+        limiter = RateLimiter()
+        now = int(time.time())
+        async with FakeIssuer() as issuer:
+            expired = issuer.access_token(issued=now - 400, lifetime=300)
+            app = _gate_app(issuer, limiter=limiter)
+            async with TestClient(TestServer(app)) as client:
+                first = await client.get("/queue", headers=_bearer(expired))
+                second = await client.get(
+                    "/queue", headers=_bearer(issuer.access_token())
+                )
+                statuses = (first.status, second.status)
+
+        assert statuses == (401, 200)
+        # The valid token also clears the failure of the first one.
+        assert limiter.seconds_until_retry("127.0.0.1") == 0
+
+    async def test_two_refused_tokens_get_429(
+        self, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        from aiohttp.test_utils import TestClient, TestServer
+
+        from gate import RateLimiter
+
+        limiter = RateLimiter()
+        async with FakeIssuer() as issuer:
+            bad = issuer.access_token(aud="other")
+            app = _gate_app(issuer, limiter=limiter)
+            with caplog.at_level("WARNING", logger="comfyui_curu_auth"):
+                async with TestClient(TestServer(app)) as client:
+                    first = await client.get("/queue", headers=_bearer(bad))
+                    second = await client.get("/queue", headers=_bearer(bad))
+                    statuses = (first.status, second.status)
+
+        assert statuses == (401, 429)
+        refusals = [
+            r.getMessage() for r in caplog.records if "token refused" in r.getMessage()
+        ]
+        # Each refused token writes its line, also the one in the wait.
+        assert len(refusals) == 2
+
+    async def test_the_static_credential_still_waits_in_a_backoff(self) -> None:
+        """FR-004 of spec 002: a correct static credential in a wait gets 429."""
+        from aiohttp.test_utils import TestClient, TestServer
+
+        from gate import RateLimiter
+
+        limiter = RateLimiter()
+        async with FakeIssuer() as issuer:
+            app = _gate_app(issuer, limiter=limiter)
+            async with TestClient(TestServer(app)) as client:
+                await client.get("/queue", headers=_bearer("wrong"))
+                response = await client.get("/queue", headers=_bearer(STATIC))
+                status = response.status
+
+        assert status == 429
