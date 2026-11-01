@@ -61,6 +61,7 @@ try:
         COOKIE_MAX_AGE_SECONDS,
         RateLimiter,
         SessionStore,
+        TokenCheckUnavailableError,
         client_key,
         set_session_cookie,
     )
@@ -73,6 +74,7 @@ except ImportError:
         COOKIE_MAX_AGE_SECONDS,
         RateLimiter,
         SessionStore,
+        TokenCheckUnavailableError,
         client_key,
         set_session_cookie,
     )
@@ -609,6 +611,10 @@ MAX_ACCESS_TOKEN_LIFETIME_SECONDS = 3600
 #: The shortest time between two reads of the keys, in seconds (ADR-008).
 KEY_REFRESH_SECONDS = 60.0
 
+#: The longest time the gate trusts keys without a new read, in seconds. A
+#: key that the identity provider removed stops working within this time.
+KEY_MAX_AGE_SECONDS = 3600.0
+
 
 @dataclass(frozen=True)
 class ResourceServerConfig:
@@ -674,11 +680,14 @@ class IssuerKeys:
         issuer_url: str,
         *,
         refresh_seconds: float = KEY_REFRESH_SECONDS,
+        max_age_seconds: float = KEY_MAX_AGE_SECONDS,
         timeout: float = 10.0,
         clock: Callable[[], float] = time.monotonic,
     ) -> None:
         self._issuer_url = issuer_url
         self._refresh_seconds = refresh_seconds
+        self._max_age_seconds = max_age_seconds
+        self._loaded_at: float | None = None
         self._timeout = timeout
         self._clock = clock
         self._jwks_uri: str | None = None
@@ -698,14 +707,20 @@ class IssuerKeys:
                 raise
             return None
 
+    def _stale(self) -> bool:
+        return (
+            self._loaded_at is not None
+            and self._clock() - self._loaded_at >= self._max_age_seconds
+        )
+
     async def key_for(self, header: dict[str, Any]) -> tuple[Any, str]:
         found = self._select(header)
-        if found is not None:
+        if found is not None and not self._stale():
             return found
         async with self._lock:
             # Another request may have read the keys while this one waited.
             found = self._select(header)
-            if found is not None:
+            if found is not None and not self._stale():
                 return found
             if self._read_at is None or (
                 self._clock() - self._read_at >= self._refresh_seconds
@@ -727,6 +742,7 @@ class IssuerKeys:
                 )
                 self._jwks_uri = str(document["jwks_uri"])
             self._key_set = await _fetch_jwks(self._jwks_uri, timeout=self._timeout)
+            self._loaded_at = self._read_at
         except (OIDCDiscoveryError, OIDCTokenVerificationError) as exc:
             # A provider fault, not an authentication failure: another text,
             # so fail2ban and crowdsec do not ban the caller for it. The old
@@ -830,6 +846,9 @@ def build_token_check(
         try:
             claims = await verify_access_token(token, config=config, keys=issuer_keys)
         except OIDCTokenVerificationError as exc:
+            if exc.reason == "issuer not available":
+                # No keys at all: the identity provider failed, not the caller.
+                raise TokenCheckUnavailableError(exc.reason) from exc
             return exc.reason
         client = claims.get("azp") or claims.get("client_id") or claims.get("cid")
         _logger.debug(
@@ -1109,6 +1128,7 @@ __all__ = [
     "ALLOWED_ALGORITHMS",
     "CLOCK_LEEWAY_SECONDS",
     "DEFAULT_SCOPES",
+    "KEY_MAX_AGE_SECONDS",
     "KEY_REFRESH_SECONDS",
     "MAX_ACCESS_TOKEN_LIFETIME_SECONDS",
     "OIDC_CALLBACK_PATH",

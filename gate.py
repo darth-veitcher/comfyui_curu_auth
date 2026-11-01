@@ -381,7 +381,12 @@ def build_gate_middleware(
 
         key = client_key(request)
         supplied_header_value = request.headers.get("Authorization", "")
-        supplied_header = supplied_header_value.encode("latin-1")
+        try:
+            supplied_header = supplied_header_value.encode("latin-1")
+        except UnicodeEncodeError:
+            # A header outside Latin-1 can never be the credential. It is a
+            # wrong one, not a server error (issue #19).
+            supplied_header = b""
 
         # Resource-server mode (ADR-008). A valid access token passes before
         # the wait; a refused one keeps its reason for the log line below.
@@ -392,7 +397,22 @@ def build_gate_middleware(
             and token_check is not None
             and not secrets.compare_digest(supplied_header, expected_header)
         ):
-            token_refusal = await token_check(token)
+            try:
+                token_refusal = await token_check(token)
+            except TokenCheckUnavailableError as exc:
+                # The identity provider failed, not the caller: no failure,
+                # and no "authentication failure" line for fail2ban.
+                _logger.error(
+                    "comfyui_curu_auth: identity provider unavailable for a token "
+                    "from %s (%s %s): %s",
+                    key,
+                    request.method,
+                    request.path,
+                    exc,
+                )
+                return web.json_response(
+                    {"detail": "identity provider unavailable"}, status=503
+                )
             if token_refusal is None:
                 if rate_limiter is not None:
                     rate_limiter.record_success(key)
@@ -407,7 +427,9 @@ def build_gate_middleware(
                 token_refusal,
             )
 
-        if rate_limiter is not None:
+        # A refused token was checked already, so it gets its real answer
+        # (401) and counts, also in a wait (ADR-008). Everything else waits.
+        if rate_limiter is not None and token_refusal is None:
             retry_after = rate_limiter.seconds_until_retry(key)
             if retry_after > 0:
                 seconds = int(retry_after) + 1
@@ -472,6 +494,12 @@ def build_gate_middleware(
         return rejected
 
     return gate
+
+
+class TokenCheckUnavailableError(Exception):
+    """Raised by a ``token_check`` when it cannot decide, because the
+    identity provider is not available. The gate answers 503 and counts no
+    failure (ADR-008)."""
 
 
 def _jwt_bearer(header_value: str) -> str | None:
