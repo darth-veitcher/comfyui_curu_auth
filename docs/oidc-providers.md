@@ -123,6 +123,79 @@ Read the `sub` of a person at the identity provider. The sections for rauthy, Au
 | Register a confidential client (`public: false`). Authelia checks the PKCE S256 that the gate sends. | Tested live (4.39.20) |
 | Authelia signs ID tokens with RS256. | Tested live (4.39.20) |
 
+## Let programs send access tokens
+
+A program can send an access token of the identity provider on the Bearer path. The [README](../README.md#let-a-program-call-comfyui-with-an-access-token) gives the settings. The gate checks each token itself, with the keys of the identity provider.
+
+| Need | How to check it |
+|---|---|
+| A grant for a program with no person, usually `client_credentials` | The discovery document lists it in `grant_types_supported`. |
+| A JWT access token | A JWT has three parts with a `.` between them. An opaque token cannot pass. |
+| A fixed `aud` value for this gate | Set `COMFYUI_CURU_AUTH_OIDC_AUDIENCE` to it. |
+| A lifetime of 1 hour or less | `exp` minus `iat` of a token. |
+| `typ` `at+jwt`, or a client id and a scope | A token of the type `JWT`, or with no `typ`, needs `azp`, `client_id` or `cid`, and `scope` or `scp`. |
+
+### rauthy
+
+| Fact | Source |
+|---|---|
+| Make a confidential client with the flow `client_credentials`. | Tested live (0.37.2) |
+| Send the client secret in the form. rauthy 0.37.2 refuses HTTP Basic on this grant. | Tested live (0.37.2) |
+| Send `resource=<audience>` in the token request. rauthy then puts it in `aud`, and the gate accepts the token. | Tested live (0.37.2) |
+| Set `allowed_resources` of the client with the admin API. The bootstrap files of 0.37.2 cannot set it. | Tested live (0.37.2) |
+| A token for another resource has another `aud`. The gate refuses it with HTTP 401. | Tested live (0.37.2) |
+| A token with no `resource` has only the client id in `aud`. The gate refuses it. | Tested live (0.37.2) |
+| rauthy refuses a `resource` that is not in `allowed_resources`, with `invalid_target`. | Tested live (0.37.2) |
+| A `client_credentials` token holds the `default_scopes` of the client. The live test requires `comfy` from them. | Tested live (0.37.2) |
+| A `client_credentials` token has `typ` `at+jwt`. | Provider documentation |
+
+### Authentik
+
+| Fact | Source |
+|---|---|
+| Make one OAuth2 provider only for this gate. `aud` is its client id, so set the audience to that client id. | Provider documentation |
+| **Select a signing key on the provider.** Without one, the token is HS256, and the gate refuses it. | Provider documentation |
+| An access token has `typ` `JWT`, with `azp` and `scope`, so it passes. An ID token has no `scope`, and the gate refuses it. | Provider documentation |
+| A program uses `client_credentials` with the client id, the user name of a service account, and an app password. | Provider documentation |
+| **Bind the application to a group**, and put the service account in it. | Provider documentation |
+| Set the access token validity of the provider to 1 hour or less, for example `minutes=10`. | Provider documentation |
+
+### Keycloak
+
+| Fact | Source |
+|---|---|
+| Add an Audience mapper to a client scope of the program client, with "Add to access token" on. Its value is the audience. | Provider documentation |
+| Turn on "Client authentication" and "Service account roles" on the client of the program. | Provider documentation |
+| An access token has `typ` `JWT`, `azp` and `scope`, so it passes. | Provider documentation |
+
+### Auth0
+
+| Fact | Source |
+|---|---|
+| Make an API. Its Identifier is the `aud` of each token for it, so set the audience to that Identifier. | Provider documentation |
+| Authorize a machine-to-machine application for the API. It sends `audience=<Identifier>` in each token request. | Provider documentation |
+| Give the API the RS256 algorithm. | Provider documentation |
+
+### Okta
+
+| Fact | Source |
+|---|---|
+| Use a custom authorization server. Its Audience setting is the audience. | Provider documentation |
+| A `client_credentials` request needs a custom scope. A request for `openid` alone fails. | Provider documentation |
+| An access token has no `typ`, `cid` as the client id and `scp` as a list, so it passes. | Provider documentation |
+
+### Microsoft Entra ID
+
+| Fact | Source |
+|---|---|
+| **Not supported for programs.** A `client_credentials` token has `roles` but no `scp`. Its type is `JWT`, so the gate refuses it. | Provider documentation |
+
+### Google
+
+| Fact | Source |
+|---|---|
+| **Not supported for programs.** Google access tokens are opaque, and Google has no `client_credentials` grant. | Provider documentation |
+
 ## Fix a login that fails
 
 The gate writes one line for each login that the callback refuses. The reason follows `oidc callback:`. The line never holds a token or a claim value. A fault at the start of the login gives HTTP 503 and a line with `OIDC login unavailable:`.
@@ -138,4 +211,6 @@ The gate writes one line for each login that the callback refuses. The reason fo
 | `algorithm HS256 is not allowed ... select a signing key` | Select a signing key on the provider. This is the usual Authentik fault. |
 | `the person is not on the allowlist` | Add the `sub`, the verified email or the domain of the person. |
 | `the azp of the ID token is not this client` | Check that the client id setting is the client id of the provider. |
+| `token refused: <reason>` on the Bearer path | Read the reason: `wrong audience`, `expired`, `lifetime too long`, `ID token or no client id and scope`, `missing scope`, `wrong issuer` or `wrong token type`. Change the setting or the client at the identity provider. |
+| `cannot read the OIDC keys` | Make sure that the identity provider is available. The gate tries again after 60 seconds at the earliest. |
 | `unknown key` | The identity provider changed its keys during the login: try again. Or the ID token has no `kid`, and the JWKS has more than one signing key. Then make the identity provider send `kid`. |

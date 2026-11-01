@@ -42,8 +42,8 @@ description: "Task list for 004-oidc-access-tokens"
 
 ## Phase 6: Documentation and polish
 
-- [ ] T009 Add the mode and a section for programs of each provider to `README.md` and `docs/oidc-providers.md`.
-- [ ] T010 Add the change to `CHANGELOG.md` and `AGENTS.md`.
+- [x] T009 Add the mode and a section for programs of each provider to `README.md` and `docs/oidc-providers.md`.
+- [x] T010 Add the change to `CHANGELOG.md` and `AGENTS.md`.
 - [ ] T011 Run the quality gates, `uv run pytest` 3 times, the `rauthy` tier, and `beacon doctor --strict`.
 - [ ] T012 Get a review from `beacon-reviewer` in a new context, and fix each finding.
 
