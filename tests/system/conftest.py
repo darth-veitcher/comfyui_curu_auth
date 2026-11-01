@@ -65,6 +65,9 @@ OIDC_ENV = {
     "COMFYUI_CURU_AUTH_OIDC_CLIENT_ID": OIDC_CLIENT_ID,
     "COMFYUI_CURU_AUTH_OIDC_CLIENT_SECRET": OIDC_CLIENT_SECRET,
     "COMFYUI_CURU_AUTH_OIDC_REDIRECT_URI": OIDC_REDIRECT_URI,
+    # The Authelia of this harness has one test user, so the provider can
+    # decide who logs in (spec 003, ADR-007).
+    "COMFYUI_CURU_AUTH_OIDC_ALLOW_ANY_USER": "true",
 }
 
 
