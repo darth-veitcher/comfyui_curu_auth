@@ -14,6 +14,7 @@ import contextlib
 import logging
 import secrets
 import time
+from collections.abc import Awaitable, Callable
 from pathlib import Path
 
 from aiohttp import web
@@ -221,6 +222,7 @@ def build_gate_middleware(
     sessions: SessionStore | None = None,
     rate_limiter: RateLimiter | None = None,
     public_paths: frozenset[str] | set[str] | None = None,
+    token_check: Callable[[str], Awaitable[str | None]] | None = None,
 ) -> Middleware:
     """Return an aiohttp ``@web.middleware`` function that rejects any
     request lacking ``credential`` -- as ``Authorization: Bearer
@@ -334,6 +336,18 @@ def build_gate_middleware(
     that header, so this never changes behaviour for either of them
     (only a real browser page-load does).
 
+    ``token_check`` (default ``None``: off) turns on the resource-server
+    mode of spec 004 (ADR-008). It gets a Bearer token and returns ``None``
+    for a valid token, or a short, fixed reason for a refused one; it never
+    raises, and the reason never holds the token. Only a Bearer value that
+    is **not** the static credential and has the shape of a JWT reaches it,
+    so the static credential behaves exactly as before (FR-004 of spec 002),
+    also in a wait. A valid token passes *before* the wait is checked, as a
+    valid session cookie does: a valid signature cannot be guessed, and
+    comfy-mcp retries at once with a new token after a 401, inside the
+    first wait. Each refused token is one failed attempt and writes the
+    failure line with its reason, also when the address is in a wait.
+
     ``secrets.compare_digest`` on ``bytes`` (not ``str``) avoids a crash
     a plain ``str`` comparison would raise on a non-ASCII
     ``Authorization`` header -- applied to the header check; the cookie
@@ -366,6 +380,32 @@ def build_gate_middleware(
             return await handler(request)
 
         key = client_key(request)
+        supplied_header_value = request.headers.get("Authorization", "")
+        supplied_header = supplied_header_value.encode("latin-1")
+
+        # Resource-server mode (ADR-008). A valid access token passes before
+        # the wait; a refused one keeps its reason for the log line below.
+        token_refusal: str | None = None
+        token = _jwt_bearer(supplied_header_value) if token_check is not None else None
+        if (
+            token is not None
+            and token_check is not None
+            and not secrets.compare_digest(supplied_header, expected_header)
+        ):
+            token_refusal = await token_check(token)
+            if token_refusal is None:
+                if rate_limiter is not None:
+                    rate_limiter.record_success(key)
+                return await handler(request)
+        if token_refusal is not None:
+            _logger.warning(
+                "comfyui_curu_auth: authentication failure from %s (%s %s: "
+                "token refused: %s)",
+                key,
+                request.method,
+                request.path,
+                token_refusal,
+            )
 
         if rate_limiter is not None:
             retry_after = rate_limiter.seconds_until_retry(key)
@@ -396,8 +436,6 @@ def build_gate_middleware(
                     _expire_session_cookie(blocked, request)
                 return blocked
 
-        supplied_header_value = request.headers.get("Authorization", "")
-        supplied_header = supplied_header_value.encode("latin-1")
         if secrets.compare_digest(supplied_header, expected_header):
             if rate_limiter is not None:
                 rate_limiter.record_success(key)
@@ -411,12 +449,14 @@ def build_gate_middleware(
         if rate_limiter is not None and credential_was_offered:
             rate_limiter.record_failure(key)
 
-        _logger.warning(
-            "comfyui_curu_auth: authentication failure from %s (%s %s)",
-            key,
-            request.method,
-            request.path,
-        )
+        # A refused access token already wrote its line, with its reason.
+        if token_refusal is None:
+            _logger.warning(
+                "comfyui_curu_auth: authentication failure from %s (%s %s)",
+                key,
+                request.method,
+                request.path,
+            )
 
         if "text/html" in request.headers.get("Accept", ""):
             redirect = web.HTTPFound(LOGIN_PATH)
@@ -432,6 +472,16 @@ def build_gate_middleware(
         return rejected
 
     return gate
+
+
+def _jwt_bearer(header_value: str) -> str | None:
+    """The token of ``Bearer <token>`` when the token has the shape of a JWT
+    (three parts with two dots, no space); else ``None``."""
+
+    scheme, _, token = header_value.partition(" ")
+    if scheme != "Bearer" or token.count(".") != 2 or " " in token:
+        return None
+    return token
 
 
 class SessionStore:

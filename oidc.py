@@ -34,7 +34,7 @@ import logging
 import secrets
 import time
 import warnings
-from collections.abc import Callable
+from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, NoReturn
 from urllib.parse import urlencode, urlsplit
@@ -774,6 +774,35 @@ async def verify_access_token(
     return claims
 
 
+def build_token_check(
+    config: ResourceServerConfig, keys: IssuerKeys | None = None
+) -> Callable[[str], Awaitable[str | None]]:
+    """The ``token_check`` for :func:`gate.build_gate_middleware` (ADR-008).
+
+    It returns ``None`` for a valid access token, and the fixed reason of
+    :func:`verify_access_token` for a refused one. It never raises for a
+    bad token. An accepted token writes its client id and ``sub`` at DEBUG,
+    for an audit that joins this log with the log of the caller.
+    """
+
+    issuer_keys = keys if keys is not None else IssuerKeys(config.issuer_url)
+
+    async def check(token: str) -> str | None:
+        try:
+            claims = await verify_access_token(token, config=config, keys=issuer_keys)
+        except OIDCTokenVerificationError as exc:
+            return exc.reason
+        client = claims.get("azp") or claims.get("client_id") or claims.get("cid")
+        _logger.debug(
+            "comfyui_curu_auth: access token accepted (client %r, sub %r)",
+            client,
+            claims.get("sub"),
+        )
+        return None
+
+    return check
+
+
 async def verify_id_token(
     id_token: str,
     *,
@@ -1056,6 +1085,7 @@ __all__ = [
     "ResourceServerConfig",
     "build_authorization_url",
     "build_oidc_routes",
+    "build_token_check",
     "check_token_algorithm",
     "discovery_url",
     "fetch_discovery_document",
