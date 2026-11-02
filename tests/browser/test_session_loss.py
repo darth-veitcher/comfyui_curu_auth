@@ -220,3 +220,17 @@ async def test_an_oidc_session_is_lost(browser) -> None:
             assert await wait_for_path(page, LOGIN_PATH, LIMIT_SECONDS)
         finally:
             await gate.cleanup()
+
+
+async def test_another_node_gives_http_401(gate: Gate, browser) -> None:
+    """Scenario: Another node gives HTTP 401 (rule T3, SC-005). The page
+    gets the answer as before, and the tab stays."""
+    page = await open_comfyui(browser, gate, "?poll=0&ws=0")
+    gate.seen.clear()
+
+    statuses = [await page.evaluate("window.callOther()") for _ in range(20)]
+
+    assert statuses == [401] * 20
+    await asyncio.sleep(1)
+    assert page.url == f"{gate.url}/?poll=0&ws=0"
+    assert LOGIN_PATH not in gate.seen
