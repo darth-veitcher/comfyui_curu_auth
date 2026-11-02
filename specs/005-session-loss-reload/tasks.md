@@ -132,3 +132,9 @@ This phase blocks User Story 1, because the module acts on the mark. It also ser
 3. Do Phase 4, to remove false moves to the login page.
 4. Do Phases 5 and 6, to prove the effect on programs, log tools and the real ComfyUI frontend.
 5. Do Phase 7, and open the pull request. Say in the pull request that the log line does not change.
+
+## Phase 8: Convergence
+
+- [x] T026 Add a browser test in `tests/browser/test_session_loss.py`: a tab that the rate limiter blocks gets HTTP 429 and goes to the login page per FR-003 (partial)
+- [x] T027 Add a browser test in `tests/browser/test_session_loss.py`: two tabs in one browser context each go to the login page per edge case "more than one tab" (partial)
+- [x] T028 Add a browser test in `tests/browser/test_session_loss.py`: the wrapped `WebSocket` keeps `OPEN` and `CLOSED`, and a new socket is an instance of `WebSocket` per contracts/tab-module.md (partial)

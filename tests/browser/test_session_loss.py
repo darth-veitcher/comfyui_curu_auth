@@ -284,3 +284,73 @@ async def test_a_probe_with_no_mark_keeps_the_tab(gate: Gate, browser) -> None:
 
     assert [path for path in gate.seen if path.endswith("/session_loss.js")]
     assert page.url == f"{gate.url}/?poll=0"
+
+
+async def test_a_blocked_tab_gets_http_429_and_moves(gate: Gate, browser) -> None:
+    """FR-003 and the edge case "HTTP 429": the rate limiter blocks the
+    address of the tab, so the gate answers the stale cookie with HTTP 429.
+    The 429 has the mark, so the tab goes to the login page."""
+    page = await open_comfyui(browser, gate, "?ws=0")
+    statuses: list[int] = []
+    page.on(
+        "response",
+        lambda response: (
+            statuses.append(response.status) if "/api/jobs" in response.url else None
+        ),
+    )
+    # A valid cookie passes before the limiter, so the tab still works. Four
+    # failures give a wait of 8 seconds.
+    for _ in range(4):
+        gate.rate_limiter.record_failure("127.0.0.1")
+    await asyncio.sleep(1.5)
+    assert page.url == f"{gate.url}/?ws=0"
+
+    gate.lose_sessions()
+
+    assert await wait_for_path(page, LOGIN_PATH, LIMIT_SECONDS)
+    assert 429 in statuses
+    assert 401 not in statuses
+
+
+async def test_each_of_two_tabs_goes_to_the_login_page(gate: Gate, browser) -> None:
+    """Edge case "more than one tab": two tabs of one browser share the
+    cookie. The first rejection expires it for both, and each tab goes to
+    the login page by itself."""
+    first = await open_comfyui(browser, gate)
+    second = await first.context.new_page()
+    await second.goto(f"{gate.url}/")
+    await second.wait_for_function("window.moduleLoaded !== undefined")
+
+    gate.lose_sessions()
+    await gate.close_sockets()
+
+    assert await wait_for_path(first, LOGIN_PATH, LIMIT_SECONDS)
+    assert await wait_for_path(second, LOGIN_PATH, LIMIT_SECONDS)
+
+
+async def test_the_wrapped_websocket_keeps_its_constants(gate: Gate, browser) -> None:
+    """contracts/tab-module.md: the wrapper of ``WebSocket`` keeps the
+    static constants, and a new socket is an instance of ``WebSocket``."""
+    page = await open_comfyui(browser, gate, "?poll=0&ws=0")
+
+    result = await page.evaluate(
+        """() => {
+          const socket = new WebSocket(`ws://${location.host}/ws`);
+          const result = {
+            name: WebSocket.name,
+            constants: [WebSocket.CONNECTING, WebSocket.OPEN,
+                        WebSocket.CLOSING, WebSocket.CLOSED],
+            instance: socket instanceof WebSocket,
+            readyState: socket.readyState,
+          };
+          socket.close();
+          return result;
+        }"""
+    )
+
+    assert result == {
+        "name": "SessionCheckedWebSocket",
+        "constants": [0, 1, 2, 3],
+        "instance": True,
+        "readyState": 0,
+    }
