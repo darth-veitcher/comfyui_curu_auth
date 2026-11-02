@@ -37,6 +37,67 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 <!-- version list -->
 
+## v2.1.1 (2026-11-02)
+
+### Bug Fixes
+
+- **oidc**: A login through a provider on another site no longer returns to the login page
+  ([#23](https://github.com/darth-veitcher/comfyui_curu_auth/pull/23),
+  [`746721e`](https://github.com/darth-veitcher/comfyui_curu_auth/commit/746721ec58d902a5ccacadf5bf48402d0fdd1626))
+
+### Chores
+
+- Finish the bullet ([#22](https://github.com/darth-veitcher/comfyui_curu_auth/pull/22),
+  [`8113b16`](https://github.com/darth-veitcher/comfyui_curu_auth/commit/8113b160881713f6ea5948c1d06af7c628451d66))
+
+- Finish the bullet ([#21](https://github.com/darth-veitcher/comfyui_curu_auth/pull/21),
+  [`bbfdbc1`](https://github.com/darth-veitcher/comfyui_curu_auth/commit/bbfdbc18f3056ab31b1338acc9a07b309d58dafe))
+
+- Start the bullet for the Authentik scope note
+  ([#22](https://github.com/darth-veitcher/comfyui_curu_auth/pull/22),
+  [`8113b16`](https://github.com/darth-veitcher/comfyui_curu_auth/commit/8113b160881713f6ea5948c1d06af7c628451d66))
+
+- Start the bullet for the comfy-mcp end-to-end test
+  ([#21](https://github.com/darth-veitcher/comfyui_curu_auth/pull/21),
+  [`bbfdbc1`](https://github.com/darth-veitcher/comfyui_curu_auth/commit/bbfdbc18f3056ab31b1338acc9a07b309d58dafe))
+
+### Documentation
+
+- An Authentik program token passes only when its request asks for a scope
+  ([#22](https://github.com/darth-veitcher/comfyui_curu_auth/pull/22),
+  [`8113b16`](https://github.com/darth-veitcher/comfyui_curu_auth/commit/8113b160881713f6ea5948c1d06af7c628451d66))
+
+- Connect comfy-mcp to the gate, and run the comfy_mcp tier
+  ([#21](https://github.com/darth-veitcher/comfyui_curu_auth/pull/21),
+  [`bbfdbc1`](https://github.com/darth-veitcher/comfyui_curu_auth/commit/bbfdbc18f3056ab31b1338acc9a07b309d58dafe))
+
+- Say only what the comfy-mcp end-to-end test proves
+  ([#21](https://github.com/darth-veitcher/comfyui_curu_auth/pull/21),
+  [`bbfdbc1`](https://github.com/darth-veitcher/comfyui_curu_auth/commit/bbfdbc18f3056ab31b1338acc9a07b309d58dafe))
+
+- **readme**: Say which redirect loses the Strict cookie after a login on another site
+  ([#23](https://github.com/darth-veitcher/comfyui_curu_auth/pull/23),
+  [`746721e`](https://github.com/darth-veitcher/comfyui_curu_auth/commit/746721ec58d902a5ccacadf5bf48402d0fdd1626))
+
+### Testing
+
+- Comfy-mcp reaches the gate with its own rauthy token, end to end
+  ([#21](https://github.com/darth-veitcher/comfyui_curu_auth/pull/21),
+  [`bbfdbc1`](https://github.com/darth-veitcher/comfyui_curu_auth/commit/bbfdbc18f3056ab31b1338acc9a07b309d58dafe))
+
+- Prove the refusal reason, the retry and the /ws token end to end
+  ([#21](https://github.com/darth-veitcher/comfyui_curu_auth/pull/21),
+  [`bbfdbc1`](https://github.com/darth-veitcher/comfyui_curu_auth/commit/bbfdbc18f3056ab31b1338acc9a07b309d58dafe))
+
+- **oidc**: A login from another site's provider lands on ComfyUI, not the login page
+  ([#23](https://github.com/darth-veitcher/comfyui_curu_auth/pull/23),
+  [`746721e`](https://github.com/darth-veitcher/comfyui_curu_auth/commit/746721ec58d902a5ccacadf5bf48402d0fdd1626))
+
+- **oidc**: Each good callback answers 200 and a replay is refused with 401
+  ([#23](https://github.com/darth-veitcher/comfyui_curu_auth/pull/23),
+  [`746721e`](https://github.com/darth-veitcher/comfyui_curu_auth/commit/746721ec58d902a5ccacadf5bf48402d0fdd1626))
+
+
 ## v2.1.0 (2026-11-01)
 
 ### Features
