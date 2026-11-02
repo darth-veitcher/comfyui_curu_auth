@@ -17,10 +17,10 @@ description: "Task list for 005-session-loss-reload"
 
 ## Phase 1: Setup
 
-- [ ] T001 Register the `browser` marker, and exclude it from the default run, in `pyproject.toml`.
-- [ ] T002 Create `tests/browser/conftest.py` with the real gate middleware on a free port, a `SessionStore` that a test can clear, and a Chromium page from Playwright.
-- [ ] T003 Add a double of ComfyUI to `tests/browser/conftest.py`. Its page at `/` imports `web/session_loss.js`, polls `/api/jobs` each second, and opens `/ws` again after each close.
-- [ ] T004 Make `tests/browser/conftest.py` fail, and not skip, when Playwright or Chromium is not installed.
+- [x] T001 Register the `browser` marker, and exclude it from the default run, in `pyproject.toml`.
+- [x] T002 Create `tests/browser/conftest.py` with the real gate middleware on a free port, a `SessionStore` that a test can clear, and a Chromium page from Playwright.
+- [x] T003 Add a double of ComfyUI to `tests/browser/conftest.py`. Its page at `/` imports `web/session_loss.js`, polls `/api/jobs` each second, and opens `/ws` again after each close.
+- [x] T004 Make `tests/browser/conftest.py` fail, and not skip, when Playwright or Chromium is not installed.
 
 **Checkpoint**: `uv run --group live pytest -m browser` starts Chromium and loads the double page.
 
