@@ -253,3 +253,34 @@ async def test_the_server_cannot_be_reached_and_comes_back(gate: Gate, browser) 
     await page.wait_for_function("window.socketOpens >= 2", timeout=10_000)
     await asyncio.sleep(2)
     assert page.url == f"{gate.url}/"
+
+
+async def test_the_socket_closes_for_another_reason(gate: Gate, browser) -> None:
+    """Scenario: The socket closes for another reason (rule T8). A socket
+    that opened and then closes causes no probe."""
+    page = await open_comfyui(browser, gate, "?poll=0")
+    await page.wait_for_function("window.socketOpens >= 1")
+    gate.seen.clear()
+
+    await gate.close_sockets()
+    await page.wait_for_function("window.socketOpens >= 2", timeout=5_000)
+    await asyncio.sleep(1)
+
+    assert not [path for path in gate.seen if path.endswith("/session_loss.js")]
+    assert page.url == f"{gate.url}/?poll=0"
+
+
+async def test_a_probe_with_no_mark_keeps_the_tab(gate: Gate, browser) -> None:
+    """Scenario: The socket closes for another reason (rule T7). A proxy
+    refuses the handshake with its own HTTP 403, so the probe gets an
+    answer with no mark, and the tab stays."""
+    page = await open_comfyui(browser, gate, "?poll=0")
+    await page.wait_for_function("window.socketOpens >= 1")
+    gate.refuse_ws = True
+    gate.seen.clear()
+
+    await gate.close_sockets()
+    await asyncio.sleep(4.5)
+
+    assert [path for path in gate.seen if path.endswith("/session_loss.js")]
+    assert page.url == f"{gate.url}/?poll=0"
