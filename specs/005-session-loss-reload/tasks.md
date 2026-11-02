@@ -30,7 +30,7 @@ description: "Task list for 005-session-loss-reload"
 
 This phase blocks User Story 1, because the module acts on the mark. It also serves User Story 3.
 
-- [ ] T005-T [US3] Write failing tests for rules G1 to G9 of `contracts/gate-rejection.md` in `tests/test_gate.py`. Cover the header on each HTTP 401 and HTTP 429 of the middleware. Cover the same status, body and log line. Cover no header on an accepted request, a handler 401 and the HTTP 503.
+- [x] T005-T [US3] Write failing tests for rules G1 to G9 of `contracts/gate-rejection.md` in `tests/test_gate.py`. Cover the header on each HTTP 401 and HTTP 429 of the middleware. Cover the same status, body and log line. Cover no header on an accepted request, a handler 401 and the HTTP 503.
 - [ ] T005-I [US3] Add the header `X-Curu-Auth: login-required` to the HTTP 401 and the HTTP 429 of the middleware in `gate.py`, as one module constant.
 
 **Checkpoint**: `uv run pytest` passes. Each existing test passes with no change to its assertions.

@@ -1824,3 +1824,203 @@ class TestBrowserUsedHttps:
 
         request = make_mocked_request("GET", "/", headers=headers)
         assert browser_used_https(request) is expected
+
+
+# --------------------------------------------------------------------------
+# The gate rejection mark -- spec 005, contracts/gate-rejection.md (G1-G9).
+# --------------------------------------------------------------------------
+
+#: The header and the value of the contract. Written out here, not imported,
+#: so a change to the constant in ``gate.py`` breaks this test.
+_MARK = ("X-Curu-Auth", "login-required")
+
+
+async def _unauthorized_handler(request: web.Request) -> web.Response:
+    """A ComfyUI route or another node that gives its own HTTP 401."""
+    return web.json_response({"error": "not allowed"}, status=401)
+
+
+async def _unavailable_check(token: str) -> str | None:
+    from gate import TokenCheckUnavailableError
+
+    raise TokenCheckUnavailableError("the test provider is down")
+
+
+async def _refuse(token: str) -> str | None:
+    return "refused by the test"
+
+
+class TestAGateRejectionIsMarked:
+    """Scenarios: A wrong Bearer header; The static credential; The log line.
+
+    A tab tells a rejection of the gate apart from each other HTTP 401 by
+    this header (spec 005, research R2). The status, the body and the log
+    line do not change, so programs and log tools see no change.
+    """
+
+    async def test_g1_a_missing_credential_gets_the_mark(self) -> None:
+        app = web.Application(middlewares=[build_gate_middleware("expected-token")])
+        app.router.add_get("/anything", _ok_handler)
+
+        async with TestClient(TestServer(app)) as client:
+            response = await client.get("/anything")
+            assert response.status == 401
+            assert response.headers.get(_MARK[0]) == _MARK[1]
+            assert await response.json() == {"detail": "missing or invalid credential"}
+
+    async def test_g1_a_wrong_bearer_header_gets_the_mark(self) -> None:
+        app = web.Application(middlewares=[build_gate_middleware("expected-token")])
+        app.router.add_get("/anything", _ok_handler)
+
+        async with TestClient(TestServer(app)) as client:
+            response = await client.get(
+                "/anything", headers={"Authorization": "Bearer wrong-token"}
+            )
+            assert response.status == 401
+            assert response.headers.get(_MARK[0]) == _MARK[1]
+            assert await response.json() == {"detail": "missing or invalid credential"}
+
+    async def test_g1_a_stale_session_cookie_gets_the_mark(self) -> None:
+        sessions = SessionStore()
+        app = web.Application(
+            middlewares=[build_gate_middleware("expected-token", sessions=sessions)]
+        )
+        app.router.add_get("/api/jobs", _ok_handler)
+
+        async with TestClient(TestServer(app)) as client:
+            response = await client.get(
+                "/api/jobs", headers={"Cookie": f"{COOKIE_NAME}=from-before-a-restart"}
+            )
+            assert response.status == 401
+            assert response.headers.get(_MARK[0]) == _MARK[1]
+
+    async def test_g1_a_websocket_handshake_with_no_session_gets_the_mark(
+        self,
+    ) -> None:
+        sessions = SessionStore()
+        app = web.Application(
+            middlewares=[build_gate_middleware("expected-token", sessions=sessions)]
+        )
+        app.router.add_get("/ws", _ws_handler)
+
+        async with TestClient(TestServer(app)) as client:
+            response = await client.get(
+                "/ws",
+                headers={
+                    "Connection": "Upgrade",
+                    "Upgrade": "websocket",
+                    "Sec-WebSocket-Version": "13",
+                    "Sec-WebSocket-Key": "dGhlIHNhbXBsZSBub25jZQ==",
+                },
+            )
+            assert response.status == 401
+            assert response.headers.get(_MARK[0]) == _MARK[1]
+
+    async def test_g2_a_blocked_client_gets_the_mark_on_the_429(self) -> None:
+        app = web.Application(
+            middlewares=[
+                build_gate_middleware("expected-token", rate_limiter=RateLimiter())
+            ]
+        )
+        app.router.add_get("/anything", _ok_handler)
+
+        async with TestClient(TestServer(app)) as client:
+            wrong = {"Authorization": "Bearer wrong-token"}
+            await client.get("/anything", headers=wrong)
+            response = await client.get("/anything", headers=wrong)
+            assert response.status == 429
+            assert response.headers.get(_MARK[0]) == _MARK[1]
+            body = await response.json()
+            assert body["detail"] == "too many attempts"
+            assert body["retry_after"] == int(response.headers["Retry-After"])
+
+    async def test_g4_an_accepted_bearer_request_has_no_mark(self) -> None:
+        app = web.Application(middlewares=[build_gate_middleware("expected-token")])
+        app.router.add_get("/anything", _ok_handler)
+
+        async with TestClient(TestServer(app)) as client:
+            response = await client.get(
+                "/anything", headers={"Authorization": "Bearer expected-token"}
+            )
+            assert response.status == 200
+            assert _MARK[0] not in response.headers
+
+    async def test_g4_an_accepted_session_cookie_has_no_mark(self) -> None:
+        sessions = SessionStore()
+        session = sessions.issue()
+        app = web.Application(
+            middlewares=[build_gate_middleware("expected-token", sessions=sessions)]
+        )
+        app.router.add_get("/anything", _ok_handler)
+
+        async with TestClient(TestServer(app)) as client:
+            response = await client.get(
+                "/anything", headers={"Cookie": f"{COOKIE_NAME}={session}"}
+            )
+            assert response.status == 200
+            assert _MARK[0] not in response.headers
+
+    async def test_g5_a_401_of_a_handler_has_no_mark(self) -> None:
+        app = web.Application(middlewares=[build_gate_middleware("expected-token")])
+        app.router.add_get("/api/other", _unauthorized_handler)
+
+        async with TestClient(TestServer(app)) as client:
+            response = await client.get(
+                "/api/other", headers={"Authorization": "Bearer expected-token"}
+            )
+            assert response.status == 401
+            assert _MARK[0] not in response.headers
+
+    async def test_g6_a_refused_access_token_gets_the_mark(self) -> None:
+        app = web.Application(
+            middlewares=[build_gate_middleware("expected-token", token_check=_refuse)]
+        )
+        app.router.add_get("/anything", _ok_handler)
+
+        async with TestClient(TestServer(app)) as client:
+            response = await client.get(
+                "/anything", headers={"Authorization": "Bearer aaa.bbb.ccc"}
+            )
+            assert response.status == 401
+            assert response.headers.get(_MARK[0]) == _MARK[1]
+            assert await response.json() == {"detail": "missing or invalid credential"}
+
+    async def test_g7_an_unavailable_provider_has_no_mark(self) -> None:
+        app = web.Application(
+            middlewares=[
+                build_gate_middleware("expected-token", token_check=_unavailable_check)
+            ]
+        )
+        app.router.add_get("/anything", _ok_handler)
+
+        async with TestClient(TestServer(app)) as client:
+            response = await client.get(
+                "/anything", headers={"Authorization": "Bearer aaa.bbb.ccc"}
+            )
+            assert response.status == 503
+            assert _MARK[0] not in response.headers
+
+    async def test_g8_the_log_line_does_not_change(
+        self, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        app = web.Application(middlewares=[build_gate_middleware("expected-token")])
+        app.router.add_get("/api/jobs", _ok_handler)
+
+        with caplog.at_level("WARNING", logger="comfyui_curu_auth"):
+            async with TestClient(TestServer(app)) as client:
+                response = await client.get(
+                    "/api/jobs", headers={"X-Forwarded-For": "203.0.113.7"}
+                )
+                assert response.headers.get(_MARK[0]) == _MARK[1]
+
+        assert [r.getMessage() for r in caplog.records] == [
+            "comfyui_curu_auth: authentication failure from 203.0.113.7 (GET /api/jobs)"
+        ]
+
+    async def test_g9_a_failed_login_form_has_no_mark(self) -> None:
+        app = _app_with_login("expected-token")
+
+        async with TestClient(TestServer(app)) as client:
+            response = await client.post(LOGIN_PATH, data={"token": "wrong"})
+            assert response.status == 401
+            assert _MARK[0] not in response.headers
