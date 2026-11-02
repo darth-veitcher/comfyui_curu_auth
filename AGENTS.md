@@ -45,7 +45,7 @@ The articles are in [the constitution](.specify/memory/constitution.md).
 | `__init__.py` | The wiring that ComfyUI imports. It reads the environment. |
 | `tests/` | The default tests. `tests/support/fake_issuer.py` is the fake OIDC provider. |
 | `tests/system/` | The `system` tier. It uses `docker-compose.yml` and `docker/` in the root of the repository. |
-| `tests/browser/` | The `browser` tier. It runs `web/session_loss.js` in Chromium against the real gate and a copy of the ComfyUI page. |
+| `tests/browser/` | The `browser` tier. It runs `web/session_loss.js` in Chromium against the real gate and a small test page that acts like the ComfyUI page. |
 | `tests/live/` | The `rauthy` tier, and the `comfy_mcp` tier in `test_comfy_mcp_end_to_end.py`. |
 | `contrib/` | The fail2ban and crowdsec configurations. |
 | `docs/` | The guides for people. |
