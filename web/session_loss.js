@@ -42,3 +42,55 @@ window.fetch = async function fetchWithSessionCheck(...args) {
   }
   return response;
 };
+
+// A browser does not show the status of a failed websocket handshake to
+// the page: a gate rejection, a server that is down and a network error
+// all close the socket before it opens. So the module asks the gate with
+// one probe: a GET of this module itself, a gated route that always
+// exists. An answer with the mark moves the tab. A network error means
+// the server cannot be reached, and the tab stays.
+//
+// The frontend opens a new socket each 300 ms after a close. The module
+// sends no more than one probe in 2 seconds.
+
+const PROBE_INTERVAL_MS = 2000;
+const PROBE_URL = import.meta.url;
+const OriginalWebSocket = window.WebSocket;
+let lastProbe = -Infinity;
+
+async function probe() {
+  const now = Date.now();
+  if (now - lastProbe < PROBE_INTERVAL_MS) {
+    return;
+  }
+  lastProbe = now;
+  let response;
+  try {
+    response = await originalFetch(PROBE_URL, {
+      cache: "no-store",
+      credentials: "same-origin",
+    });
+  } catch {
+    return;
+  }
+  if (isGateRejection(response)) {
+    leave();
+  }
+}
+
+class SessionCheckedWebSocket extends OriginalWebSocket {
+  constructor(...args) {
+    super(...args);
+    let opened = false;
+    this.addEventListener("open", () => {
+      opened = true;
+    });
+    this.addEventListener("close", () => {
+      if (!opened) {
+        probe().catch(() => {});
+      }
+    });
+  }
+}
+
+window.WebSocket = SessionCheckedWebSocket;
