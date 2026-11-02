@@ -12,7 +12,7 @@ import asyncio
 import pytest
 
 from gate import LOGIN_PATH
-from tests.browser.conftest import Gate, open_comfyui, wait_for_path
+from tests.browser.conftest import CREDENTIAL, Gate, open_comfyui, wait_for_path
 
 pytestmark = pytest.mark.browser
 
@@ -151,3 +151,24 @@ async def test_many_rejections_cause_one_move(gate: Gate, browser) -> None:
     assert await wait_for_path(page, LOGIN_PATH, LIMIT_SECONDS)
     await asyncio.sleep(0.5)
     assert gate.seen.count(LOGIN_PATH) == 1
+
+
+async def test_the_user_logs_in_again(gate: Gate, browser) -> None:
+    """Scenario: The user logs in again. The login form sends the tab to
+    ``/``, and the ComfyUI page loads with the module."""
+    page = await open_comfyui(browser, gate, "?ws=0")
+    gate.lose_sessions()
+    assert await wait_for_path(page, LOGIN_PATH, LIMIT_SECONDS)
+    # The first rejection of the stale cookie counts as one failure, so the
+    # login form waits 1 second (ADR-004, ADR-005). A person needs longer.
+    await asyncio.sleep(1.5)
+
+    await page.fill("input[name=token]", CREDENTIAL)
+    await page.press("input[name=token]", "Enter")
+    await page.wait_for_url(f"{gate.url}/", timeout=5_000)
+    await page.wait_for_function("window.moduleLoaded !== undefined")
+
+    assert await page.evaluate("window.moduleLoaded") is True
+    assert await page.text_content("#app") == "ComfyUI"
+    await asyncio.sleep(2)
+    assert page.url == f"{gate.url}/"

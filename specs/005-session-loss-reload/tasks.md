@@ -49,8 +49,8 @@ This phase blocks User Story 1, because the module acts on the mark. It also ser
 - [x] T007-I [US1] Add the wrapper of `window.WebSocket` and the probe with the original `fetch` to `web/session_loss.js`. Keep the prototype and the static constants of `WebSocket`.
 - [x] T008-T [US1] Write failing tests for "No new log line after the move" in `tests/browser/test_session_loss.py`, with `caplog`. Also test the 5-second limit (rule T10) and one move only (rule T11).
 - [x] T008-I [US1] Add the `leaving` flag and the `curu-auth:left-at` limit to `web/session_loss.js`.
-- [ ] T009-T [US1] Write a failing test for "The user logs in again" in `tests/browser/test_session_loss.py`. The login form sends the tab to `/`, and the double page loads.
-- [ ] T009-I [US1] Fix `web/session_loss.js` until T009-T passes. If T009-T passes at once, record that in the commit message of T009-T.
+- [x] T009-T [US1] Write a failing test for "The user logs in again" in `tests/browser/test_session_loss.py`. The login form sends the tab to `/`, and the double page loads.
+- [x] T009-I [US1] Fix `web/session_loss.js` until T009-T passes. If T009-T passes at once, record that in the commit message of T009-T.
 - [ ] T010-T [US1] Write a failing test for "An OIDC session is lost" in `tests/browser/test_session_loss.py`. Log in through `tests/support/fake_issuer.py`, put the cookie into Chromium, and clear the store.
 - [ ] T010-I [US1] Fix `web/session_loss.js` or `tests/browser/conftest.py` until T010-T passes. If T010-T passes at once, record that in the commit message of T010-T.
 

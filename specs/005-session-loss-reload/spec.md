@@ -83,6 +83,7 @@ An operator runs curu, comfy-mcp, fail2ban and crowdsec against the gate. Their 
 
 - The gate blocks the address with HTTP 429 after a session loss. The tab goes to the login page, because the login page is public.
 - The user has more than one tab open. Each tab goes to the login page by itself.
+- The first rejection of the stale cookie counts as one failure (ADR-004, ADR-005). So a login in the first second gets the wait message of the login form.
 - The tab has a workflow that the user did not save. ComfyUI keeps the open workflow in browser storage, so the workflow is there after the login.
 - The browser does not store the cookie after a login, for example a `Secure` cookie over HTTP. The tab must not loop between ComfyUI and the login page faster than once in 5 seconds.
 - The code for the tab does not load, or the ComfyUI frontend is too old for it. The gate stays on, and the tab behaves as it does today.
