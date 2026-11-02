@@ -47,7 +47,7 @@ This phase blocks User Story 1, because the module acts on the mark. It also ser
 - [x] T006-I [US1] Create `web/session_loss.js` with the wrapper of `window.fetch` and the move with `location.assign("/curu-auth/login")`, and set `WEB_DIRECTORY = "./web"` in `__init__.py`.
 - [x] T007-T [US1] Write failing tests in `tests/browser/test_session_loss.py` for "The gate rejects the ws handshake" (rule T5), and for one probe in 2 seconds (rule T9).
 - [x] T007-I [US1] Add the wrapper of `window.WebSocket` and the probe with the original `fetch` to `web/session_loss.js`. Keep the prototype and the static constants of `WebSocket`.
-- [ ] T008-T [US1] Write failing tests for "No new log line after the move" in `tests/browser/test_session_loss.py`, with `caplog`. Also test the 5-second limit (rule T10) and one move only (rule T11).
+- [x] T008-T [US1] Write failing tests for "No new log line after the move" in `tests/browser/test_session_loss.py`, with `caplog`. Also test the 5-second limit (rule T10) and one move only (rule T11).
 - [ ] T008-I [US1] Add the `leaving` flag and the `curu-auth:left-at` limit to `web/session_loss.js`.
 - [ ] T009-T [US1] Write a failing test for "The user logs in again" in `tests/browser/test_session_loss.py`. The login form sends the tab to `/`, and the double page loads.
 - [ ] T009-I [US1] Fix `web/session_loss.js` until T009-T passes. If T009-T passes at once, record that in the commit message of T009-T.

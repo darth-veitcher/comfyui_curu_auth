@@ -92,3 +92,62 @@ async def test_no_more_than_one_probe_in_2_seconds(gate: Gate, browser) -> None:
     assert len(handshakes) >= 5, "the double must open the socket again"
     assert 1 <= len(probes) <= 2
     assert page.url == f"{gate.url}/?poll=0"
+
+
+def _failure_lines(caplog: pytest.LogCaptureFixture) -> list[str]:
+    return [
+        record.getMessage()
+        for record in caplog.records
+        if "authentication failure" in record.getMessage()
+    ]
+
+
+async def test_no_new_log_line_after_the_move(
+    gate: Gate, browser, caplog: pytest.LogCaptureFixture
+) -> None:
+    """Scenario: No new log line after the move (SC-002, SC-003)."""
+    page = await open_comfyui(browser, gate)
+    await page.wait_for_function("window.socketOpens >= 1")
+
+    with caplog.at_level("WARNING", logger="comfyui_curu_auth"):
+        gate.lose_sessions()
+        await gate.close_sockets()
+        assert await wait_for_path(page, LOGIN_PATH, LIMIT_SECONDS)
+        await asyncio.sleep(0.5)
+        before_the_move = len(_failure_lines(caplog))
+        await asyncio.sleep(60)
+        after_the_move = len(_failure_lines(caplog)) - before_the_move
+
+    assert 1 <= before_the_move <= 10
+    assert after_the_move == 0
+
+
+async def test_no_second_move_within_5_seconds(gate: Gate, browser) -> None:
+    """Rule T10: the module does not move the tab again if the last move
+    was less than 5 seconds ago, so a page cannot loop."""
+    page = await open_comfyui(browser, gate, "?ws=0")
+    await page.evaluate(
+        "sessionStorage.setItem('curu-auth:left-at', String(Date.now()))"
+    )
+
+    gate.lose_sessions()
+
+    await asyncio.sleep(2.5)
+    assert page.url == f"{gate.url}/?ws=0", "a move inside the 5 seconds"
+    assert await wait_for_path(page, LOGIN_PATH, LIMIT_SECONDS)
+
+
+async def test_many_rejections_cause_one_move(gate: Gate, browser) -> None:
+    """Rule T11: after the module starts to leave, each later rejection
+    does nothing. The login page gets one request."""
+    page = await open_comfyui(browser, gate, "?poll=0&ws=0")
+    gate.lose_sessions()
+    gate.seen.clear()
+
+    await page.evaluate(
+        "() => { for (let i = 0; i < 20; i++) fetch('/api/jobs').catch(() => null); }"
+    )
+
+    assert await wait_for_path(page, LOGIN_PATH, LIMIT_SECONDS)
+    await asyncio.sleep(0.5)
+    assert gate.seen.count(LOGIN_PATH) == 1
