@@ -50,6 +50,35 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 <!-- version list -->
 
+## v2.2.0 (2026-11-02)
+
+### Documentation
+
+- **oidc**: Log in through the identity provider at more than one address
+  ([#26](https://github.com/darth-veitcher/comfyui_curu_auth/pull/26),
+  [`bad989a`](https://github.com/darth-veitcher/comfyui_curu_auth/commit/bad989a4596ded1e9679b1426410ed79ada6a9b6))
+
+- **oidc**: The proxy must send the scheme and the host (review fixes)
+  ([#26](https://github.com/darth-veitcher/comfyui_curu_auth/pull/26),
+  [`bad989a`](https://github.com/darth-veitcher/comfyui_curu_auth/commit/bad989a4596ded1e9679b1426410ed79ada6a9b6))
+
+### Features
+
+- **oidc**: Accept more than one redirect URI and choose one by the request origin
+  ([#26](https://github.com/darth-veitcher/comfyui_curu_auth/pull/26),
+  [`bad989a`](https://github.com/darth-veitcher/comfyui_curu_auth/commit/bad989a4596ded1e9679b1426410ed79ada6a9b6))
+
+### Testing
+
+- **oidc**: Failing tests for more than one redirect URI, chosen by origin
+  ([#26](https://github.com/darth-veitcher/comfyui_curu_auth/pull/26),
+  [`bad989a`](https://github.com/darth-veitcher/comfyui_curu_auth/commit/bad989a4596ded1e9679b1426410ed79ada6a9b6))
+
+- **oidc**: Give the init tests a redirect URI that ends in the callback path
+  ([#26](https://github.com/darth-veitcher/comfyui_curu_auth/pull/26),
+  [`bad989a`](https://github.com/darth-veitcher/comfyui_curu_auth/commit/bad989a4596ded1e9679b1426410ed79ada6a9b6))
+
+
 ## v2.1.1 (2026-11-02)
 
 ### Bug Fixes
