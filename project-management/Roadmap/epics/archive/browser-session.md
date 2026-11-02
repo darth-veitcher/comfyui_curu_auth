@@ -3,7 +3,7 @@
 <!-- Write this epic to section 7 of docs/WRITING.md (ASD-STE100). -->
 
 ## Status
-Planning  — started 2026-11-02
+Done — completed 2026-11-02
 
 ## Why now
 The session store is in memory, so each ComfyUI restart removes all sessions. curu restarts ComfyUI often. An open ComfyUI tab then continues to poll `/api/jobs` and to open `/ws` with no valid session.
@@ -38,9 +38,9 @@ link it below. Until the ADR exists, write the decision as a sentence.
 `beacon doctor` reads a sentence as a pending decision, not as a broken
 link._
 
-- [ADR-004](../../ADRs/ADR-004-only-offered-credentials-count-as-attempts.md) — only an offered credential counts as an attempt.
-- [ADR-005](../../ADRs/ADR-005-expire-a-stale-session-cookie-rather-than-exempt-it.md) — the gate expires a stale cookie; this epic builds on that.
-- [ADR-009](../../ADRs/ADR-009-a-module-in-the-comfyui-page-acts-on-a-gate-rejection.md) — a module in the ComfyUI page sends the tab to the login page on a gate rejection.
+- [ADR-004](../../../ADRs/ADR-004-only-offered-credentials-count-as-attempts.md) — only an offered credential counts as an attempt.
+- [ADR-005](../../../ADRs/ADR-005-expire-a-stale-session-cookie-rather-than-exempt-it.md) — the gate expires a stale cookie; this epic builds on that.
+- [ADR-009](../../../ADRs/ADR-009-a-module-in-the-comfyui-page-acts-on-a-gate-rejection.md) — a module in the ComfyUI page sends the tab to the login page on a gate rejection.
 
 ## Success criteria
 - After a ComfyUI restart, an open tab shows the login page within 5 seconds.

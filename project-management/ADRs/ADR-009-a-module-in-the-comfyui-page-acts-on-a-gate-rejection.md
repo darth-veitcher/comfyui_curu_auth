@@ -2,7 +2,7 @@
 
 ## Status
 
-Proposed
+Accepted
 
 _Date:_ 2026-11-02
 _Deciders:_ James Veitch (with Claude Code)
@@ -52,4 +52,4 @@ The node ships one ES module to the ComfyUI page. The module sends the tab to th
 
 - [specs/005-session-loss-reload/spec.md](../../specs/005-session-loss-reload/spec.md)
 - [specs/005-session-loss-reload/research.md](../../specs/005-session-loss-reload/research.md)
-- [Epic browser-session](../Roadmap/epics/browser-session.md)
+- [Epic browser-session](../Roadmap/epics/archive/browser-session.md)

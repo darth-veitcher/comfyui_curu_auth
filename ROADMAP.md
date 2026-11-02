@@ -44,7 +44,6 @@ _Dependency order, not a schedule — what can start now and what waits on what.
 **Wave 1 — Ready now**
 
 - ○ `browser-e2e` — Browser-driven E2E harness (Playwright + virtual authenticator) · Planning
-- ○ `browser-session` — A browser tab recovers from a lost session · Planning
 - ○ `oidc-auth` — Optional OIDC/OAuth login path · Planning
 
 **Wave 2 — Then — after browser-e2e**
@@ -57,9 +56,9 @@ _Dependency order, not a schedule — what can start now and what waits on what.
 | Epic | Title | Status | Specs | Fidelity |
 |---|---|---|---|---|
 | [browser-e2e](project-management/Roadmap/epics/browser-e2e.md) | Browser-driven E2E harness (Playwright + virtual authenticator) | Planning | — | S? A+ T:- |
-| [browser-session](project-management/Roadmap/epics/browser-session.md) | A browser tab recovers from a lost session | Planning | — | S? A? T:- |
 | [oidc-auth](project-management/Roadmap/epics/oidc-auth.md) | Optional OIDC/OAuth login path | Planning | 3/3 shipped | S+ A+ T:100% |
 | [passkey-auth](project-management/Roadmap/epics/passkey-auth.md) | Passwordless WebAuthn/passkey login | Planning | — | S? A+ T:- |
+| [browser-session](project-management/Roadmap/epics/archive/browser-session.md) | A browser tab recovers from a lost session | Done | 1/1 shipped | S+ A+ T:97% |
 | [local-test-harness](project-management/Roadmap/epics/archive/local-test-harness.md) | CPU-only Docker integration harness for ComfyUI + this node | Done | 1/1 shipped | S+ A+ T:100% |
 
 _Fidelity: `S+/S?` = has specs / none · `A+/A?` = has ADRs / none · `T:N%` = task completion_
@@ -75,3 +74,6 @@ _No active bullets._
 | [ADR-001](../../ADRs/ADR-001-docker-comfyui-test-harness.md) | Docker-based local ComfyUI test harness, adapted from curu's own | Unknown |
 | [ADR-002](../../ADRs/ADR-002-oidc-session-sharing-and-test-idp.md) | OIDC shares the existing session mechanism; Authelia (Lite) as the local test IdP | Unknown |
 | [ADR-003](../../ADRs/ADR-003-gate-public-paths-generalization.md) | Generalize `gate.py`'s single-path bypass into a "public paths" set | Unknown |
+| [ADR-004](../../../ADRs/ADR-004-only-offered-credentials-count-as-attempts.md) | Only an *offered* credential counts as an authentication attempt | Unknown |
+| [ADR-005](../../../ADRs/ADR-005-expire-a-stale-session-cookie-rather-than-exempt-it.md) | Expire a stale session cookie, rather than exempt it from the limiter | Unknown |
+| [ADR-009](../../../ADRs/ADR-009-a-module-in-the-comfyui-page-acts-on-a-gate-rejection.md) | A module in the ComfyUI page sends the tab to the login page on a gate rejection | Unknown |

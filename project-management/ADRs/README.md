@@ -39,4 +39,4 @@ Superseded ADRs keep their file; update their status to `Superseded by ADR-###`.
 | [ADR-006](ADR-006-session-cookie-secure-follows-the-browsers-scheme.md) | The session cookie is `Secure` exactly when the browser used HTTPS | Accepted | 2026-10-16 |
 | [ADR-007](ADR-007-oidc-issuer-algorithms-and-allowlist.md) | The OIDC login uses the exact issuer, asymmetric algorithms only, and an allowlist that fails closed | Accepted | 2026-11-01 |
 | [ADR-008](ADR-008-oidc-access-tokens-on-the-bearer-path.md) | The Bearer path also accepts a short-lived OIDC access token, in an opt-in resource-server mode | Accepted | 2026-11-01 |
-| [ADR-009](ADR-009-a-module-in-the-comfyui-page-acts-on-a-gate-rejection.md) | A module in the ComfyUI page sends the tab to the login page on a gate rejection | Proposed | 2026-11-02 |
+| [ADR-009](ADR-009-a-module-in-the-comfyui-page-acts-on-a-gate-rejection.md) | A module in the ComfyUI page sends the tab to the login page on a gate rejection | Accepted | 2026-11-02 |

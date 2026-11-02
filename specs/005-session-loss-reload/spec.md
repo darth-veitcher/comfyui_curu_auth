@@ -8,7 +8,7 @@
 
 **Input**: User description: "An open ComfyUI tab whose session is gone goes to the login page by itself. Today the tab keeps polling `/api/jobs` and reconnecting `/ws`, and each request writes an authentication failure line."
 
-**Epic**: [browser-session](../../project-management/Roadmap/epics/browser-session.md)
+**Epic**: [browser-session](../../project-management/Roadmap/epics/archive/browser-session.md)
 
 ## Context
 
