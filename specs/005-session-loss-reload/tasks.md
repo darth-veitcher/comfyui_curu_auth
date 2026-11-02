@@ -66,7 +66,7 @@ This phase blocks User Story 1, because the module acts on the mark. It also ser
 
 - [x] T011-T [US2] Write failing tests for "Another node gives HTTP 401" in `tests/browser/test_session_loss.py`. A handler gives HTTP 401 with no mark 20 times, and the tab stays (rule T3, SC-005).
 - [ ] T011-I [US2] Fix `web/session_loss.js` until T011-T passes. The wrapper returns the same answer to the page.
-- [ ] T012-T [US2] Write failing tests for "The server cannot be reached" and "The server comes back with the session" in `tests/browser/test_session_loss.py`. Stop the site for 30 seconds, and start it again with the same store (rules T4, T6, SC-004).
+- [x] T012-T [US2] Write failing tests for "The server cannot be reached" and "The server comes back with the session" in `tests/browser/test_session_loss.py`. Stop the site for 30 seconds, and start it again with the same store (rules T4, T6, SC-004).
 - [ ] T012-I [US2] Fix `web/session_loss.js` until T012-T passes. A network error on a fetch or on a probe never causes a move.
 - [ ] T013-T [US2] Write failing tests for "The socket closes for another reason" in `tests/browser/test_session_loss.py`. The double closes an open socket, and a probe gets an answer with no mark (rules T7, T8).
 - [ ] T013-I [US2] Fix `web/session_loss.js` until T013-T passes. A socket that opened causes no probe.

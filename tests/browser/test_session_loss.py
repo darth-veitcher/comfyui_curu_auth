@@ -234,3 +234,22 @@ async def test_another_node_gives_http_401(gate: Gate, browser) -> None:
     await asyncio.sleep(1)
     assert page.url == f"{gate.url}/?poll=0&ws=0"
     assert LOGIN_PATH not in gate.seen
+
+
+async def test_the_server_cannot_be_reached_and_comes_back(gate: Gate, browser) -> None:
+    """Scenarios: The server cannot be reached; The server comes back with
+    the session (rules T4, T6, SC-004). A network error on a poll or on a
+    probe never moves the tab."""
+    page = await open_comfyui(browser, gate)
+    await page.wait_for_function("window.socketOpens >= 1")
+
+    await gate.stop()
+    await asyncio.sleep(30)
+    assert page.url == f"{gate.url}/", "a move while the server was down"
+    errors = await page.evaluate("window.results.filter(r => r === 'network-error')")
+    assert len(errors) >= 5, "the poll must reach no server while it is down"
+
+    await gate.start()
+    await page.wait_for_function("window.socketOpens >= 2", timeout=10_000)
+    await asyncio.sleep(2)
+    assert page.url == f"{gate.url}/"

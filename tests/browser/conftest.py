@@ -203,11 +203,14 @@ class Gate:
         await self.site.start()
 
     async def stop(self) -> None:
-        """Make the server unreachable, and keep the sessions."""
-        if self.site is not None:
-            await self.site.stop()
-            self.site = None
+        """Make the server unreachable, and keep the sessions. The cleanup
+        of the runner also closes each keep-alive connection, so no request
+        of the tab reaches the server until :meth:`start`."""
         await self.close_sockets()
+        if self.runner is not None:
+            await self.runner.cleanup()
+        self.runner = None
+        self.site = None
 
     async def close_sockets(self) -> None:
         """Close each open ``/ws`` socket from the server side."""
