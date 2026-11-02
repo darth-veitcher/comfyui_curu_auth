@@ -61,6 +61,121 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 <!-- version list -->
 
+## v2.3.0 (2026-11-02)
+
+### Chores
+
+- Archive the browser-session epic and accept ADR-009
+  ([#24](https://github.com/darth-veitcher/comfyui_curu_auth/pull/24),
+  [`2efd47f`](https://github.com/darth-veitcher/comfyui_curu_auth/commit/2efd47f40c8fc115cb132a8927216aece00ababd))
+
+- Close the tasks of spec 005 (T015, T022, T023)
+  ([#24](https://github.com/darth-veitcher/comfyui_curu_auth/pull/24),
+  [`2efd47f`](https://github.com/darth-veitcher/comfyui_curu_auth/commit/2efd47f40c8fc115cb132a8927216aece00ababd))
+
+- Record the clear beacon-reviewer result (T025)
+  ([#24](https://github.com/darth-veitcher/comfyui_curu_auth/pull/24),
+  [`2efd47f`](https://github.com/darth-veitcher/comfyui_curu_auth/commit/2efd47f40c8fc115cb132a8927216aece00ababd))
+
+### Documentation
+
+- An open tab goes to the login page after a restart (T018-T021)
+  ([#24](https://github.com/darth-veitcher/comfyui_curu_auth/pull/24),
+  [`2efd47f`](https://github.com/darth-veitcher/comfyui_curu_auth/commit/2efd47f40c8fc115cb132a8927216aece00ababd))
+
+- Fix the review findings for the session-loss notes
+  ([#24](https://github.com/darth-veitcher/comfyui_curu_auth/pull/24),
+  [`2efd47f`](https://github.com/darth-veitcher/comfyui_curu_auth/commit/2efd47f40c8fc115cb132a8927216aece00ababd))
+
+- Fix the second review findings for the session-loss notes
+  ([#24](https://github.com/darth-veitcher/comfyui_curu_auth/pull/24),
+  [`2efd47f`](https://github.com/darth-veitcher/comfyui_curu_auth/commit/2efd47f40c8fc115cb132a8927216aece00ababd))
+
+- Spec, plan and tasks for the tab that goes to the login page when its session is lost
+  ([#24](https://github.com/darth-veitcher/comfyui_curu_auth/pull/24),
+  [`2efd47f`](https://github.com/darth-veitcher/comfyui_curu_auth/commit/2efd47f40c8fc115cb132a8927216aece00ababd))
+
+### Features
+
+- An open tab goes to the login page when its session is lost
+  ([#24](https://github.com/darth-veitcher/comfyui_curu_auth/pull/24),
+  [`2efd47f`](https://github.com/darth-veitcher/comfyui_curu_auth/commit/2efd47f40c8fc115cb132a8927216aece00ababd))
+
+- **gate**: Mark each 401 and 429 of the middleware with X-Curu-Auth (T005-I)
+  ([#24](https://github.com/darth-veitcher/comfyui_curu_auth/pull/24),
+  [`2efd47f`](https://github.com/darth-veitcher/comfyui_curu_auth/commit/2efd47f40c8fc115cb132a8927216aece00ababd))
+
+- **US1**: A rejected ws handshake moves the tab, through one probe (T007-I)
+  ([#24](https://github.com/darth-veitcher/comfyui_curu_auth/pull/24),
+  [`2efd47f`](https://github.com/darth-veitcher/comfyui_curu_auth/commit/2efd47f40c8fc115cb132a8927216aece00ababd))
+
+- **US1**: One move for each page load, and none within 5 seconds (T008-I)
+  ([#24](https://github.com/darth-veitcher/comfyui_curu_auth/pull/24),
+  [`2efd47f`](https://github.com/darth-veitcher/comfyui_curu_auth/commit/2efd47f40c8fc115cb132a8927216aece00ababd))
+
+- **US1**: Web/session_loss.js sends the tab to the login page on a gate rejection (T006-I)
+  ([#24](https://github.com/darth-veitcher/comfyui_curu_auth/pull/24),
+  [`2efd47f`](https://github.com/darth-veitcher/comfyui_curu_auth/commit/2efd47f40c8fc115cb132a8927216aece00ababd))
+
+### Testing
+
+- Add the browser tier with a double of the ComfyUI page (T001-T004)
+  ([#24](https://github.com/darth-veitcher/comfyui_curu_auth/pull/24),
+  [`2efd47f`](https://github.com/darth-veitcher/comfyui_curu_auth/commit/2efd47f40c8fc115cb132a8927216aece00ababd))
+
+- Convergence tests for HTTP 429, two tabs and the WebSocket wrapper (T026-T028)
+  ([#24](https://github.com/darth-veitcher/comfyui_curu_auth/pull/24),
+  [`2efd47f`](https://github.com/darth-veitcher/comfyui_curu_auth/commit/2efd47f40c8fc115cb132a8927216aece00ababd))
+
+- **system**: Clear the cookie jar before the wrong-credential step
+  ([#24](https://github.com/darth-veitcher/comfyui_curu_auth/pull/24),
+  [`2efd47f`](https://github.com/darth-veitcher/comfyui_curu_auth/commit/2efd47f40c8fc115cb132a8927216aece00ababd))
+
+- **US1**: A real ComfyUI restart sends the open tab to the login page (T016-T, T017-T)
+  ([#24](https://github.com/darth-veitcher/comfyui_curu_auth/pull/24),
+  [`2efd47f`](https://github.com/darth-veitcher/comfyui_curu_auth/commit/2efd47f40c8fc115cb132a8927216aece00ababd))
+
+- **US1**: An OIDC session that is lost moves the tab (T010-T)
+  ([#24](https://github.com/darth-veitcher/comfyui_curu_auth/pull/24),
+  [`2efd47f`](https://github.com/darth-veitcher/comfyui_curu_auth/commit/2efd47f40c8fc115cb132a8927216aece00ababd))
+
+- **US1**: Failing browser tests for a rejected poll (T006-T)
+  ([#24](https://github.com/darth-veitcher/comfyui_curu_auth/pull/24),
+  [`2efd47f`](https://github.com/darth-veitcher/comfyui_curu_auth/commit/2efd47f40c8fc115cb132a8927216aece00ababd))
+
+- **US1**: Failing browser tests for a rejected ws handshake (T007-T)
+  ([#24](https://github.com/darth-veitcher/comfyui_curu_auth/pull/24),
+  [`2efd47f`](https://github.com/darth-veitcher/comfyui_curu_auth/commit/2efd47f40c8fc115cb132a8927216aece00ababd))
+
+- **US1**: Failing browser tests for the move limits (T008-T)
+  ([#24](https://github.com/darth-veitcher/comfyui_curu_auth/pull/24),
+  [`2efd47f`](https://github.com/darth-veitcher/comfyui_curu_auth/commit/2efd47f40c8fc115cb132a8927216aece00ababd))
+
+- **US1**: The user logs in again after the move (T009-T)
+  ([#24](https://github.com/darth-veitcher/comfyui_curu_auth/pull/24),
+  [`2efd47f`](https://github.com/darth-veitcher/comfyui_curu_auth/commit/2efd47f40c8fc115cb132a8927216aece00ababd))
+
+- **US2**: A server that cannot be reached keeps the tab (T012-T)
+  ([#24](https://github.com/darth-veitcher/comfyui_curu_auth/pull/24),
+  [`2efd47f`](https://github.com/darth-veitcher/comfyui_curu_auth/commit/2efd47f40c8fc115cb132a8927216aece00ababd))
+
+- **US2**: A socket that closes for another reason keeps the tab (T013-T)
+  ([#24](https://github.com/darth-veitcher/comfyui_curu_auth/pull/24),
+  [`2efd47f`](https://github.com/darth-veitcher/comfyui_curu_auth/commit/2efd47f40c8fc115cb132a8927216aece00ababd))
+
+- **US2**: Another node's HTTP 401 keeps the tab (T011-T)
+  ([#24](https://github.com/darth-veitcher/comfyui_curu_auth/pull/24),
+  [`2efd47f`](https://github.com/darth-veitcher/comfyui_curu_auth/commit/2efd47f40c8fc115cb132a8927216aece00ababd))
+
+- **US3**: Failing tests for the gate rejection mark (T005-T)
+  ([#24](https://github.com/darth-veitcher/comfyui_curu_auth/pull/24),
+  [`2efd47f`](https://github.com/darth-veitcher/comfyui_curu_auth/commit/2efd47f40c8fc115cb132a8927216aece00ababd))
+
+- **US3**: The contrib patterns match each rejection line (T014-T)
+  ([#24](https://github.com/darth-veitcher/comfyui_curu_auth/pull/24),
+  [`2efd47f`](https://github.com/darth-veitcher/comfyui_curu_auth/commit/2efd47f40c8fc115cb132a8927216aece00ababd))
+
+
 ## v2.2.0 (2026-11-02)
 
 ### Documentation
