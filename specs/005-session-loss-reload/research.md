@@ -92,6 +92,12 @@ The repository has no Node toolchain. A Node test runner adds a toolchain for on
 - Add the browser test to the `rauthy` tier. Rejected: that tier needs rauthy, and this feature does not.
 - Test the module with Node and `jsdom`. Rejected: a new toolchain, and `jsdom` has no real `WebSocket` failure behaviour.
 
+## R8. The open workflow after the move
+
+**Decision**: Rely on the ComfyUI setting `Comfy.Workflow.Persist`.
+
+**Rationale**: The frontend of ComfyUI v0.27.0 has the setting "Persist workflow state and restore on page (re)load". Its default is on (`defaultValue: true`, frontend 1.16.1 and later). The frontend writes the open workflow to browser storage and reads it at the next page load. So the move to the login page does not lose the workflow.
+
 ## R7. Effect on the log and on fail2ban
 
 **Decision**: No change to the log line.

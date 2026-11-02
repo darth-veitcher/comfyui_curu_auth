@@ -54,7 +54,7 @@ A correct credential gives the normal answer of ComfyUI. A missing or wrong cred
 
 Open `/curu-auth/login`, or any page of ComfyUI, and paste the credential. The gate then sets a session cookie, `curu_auth`, for 30 days. The cookie is `HttpOnly` and `SameSite=Strict`. It holds a separate session token, so the browser never sends the credential again.
 
-The gate keeps the sessions in memory, so a restart of ComfyUI ends each session. An open ComfyUI tab then goes to the login page by itself. This occurs within 5 seconds after ComfyUI is ready again. Log in, and the tab shows ComfyUI again. ComfyUI keeps your open workflow in the browser storage, so you do not lose it. This is true when its setting to keep the workflow is on (the default).
+The gate keeps the sessions in memory, so a restart of ComfyUI ends each session. An open ComfyUI tab then goes to the login page by itself. This occurs within 5 seconds after ComfyUI is ready again. Log in, and the tab shows ComfyUI again. ComfyUI keeps your open workflow in the browser storage, so you do not lose it. The ComfyUI setting "Persist workflow state and restore on page (re)load" does this. It is on by default.
 
 While ComfyUI is down, the tab stays on its page. An HTTP 401 from ComfyUI or from another node does not move the tab.
 
@@ -229,9 +229,9 @@ The node adds one `aiohttp` middleware to `server.PromptServer.instance.app` whe
 
 The node gives ComfyUI one script for its page, `web/session_loss.js`, through `WEB_DIRECTORY`. `WEB_DIRECTORY` is the setting of a node that tells ComfyUI which folder to load into its page. The gate covers that file like each other route. If the script does not load, the gate works as before.
 
-The gate adds the header `X-Curu-Auth: login-required` to each HTTP 401 and HTTP 429 that it gives for a gated route. The login page and the OIDC routes do not add it. The header does not change the status or the body, so a program can ignore it. The script watches the answers of `fetch`, the browser function that the page uses for its HTTP requests. When an answer has that header, the script sends the tab to the login page. The script also moves the tab when a `fetch` follows a redirect to the login page.
+The gate adds the header `X-Curu-Auth: login-required` to each HTTP 401 and HTTP 429 that it gives for a gated route. The login page and the OIDC routes do not add it. The header does not change the status or the body, so a program can ignore it. The script watches the answers of `fetch`, the browser function that the page uses for its HTTP requests. When an answer has that header, the script sends the tab to the login page. The script also sends the tab to the login page when a `fetch` follows a redirect to it.
 
-A browser does not give the page the status of a failed `/ws` handshake. So, after such a failure, the script asks for its own file one time, and no more than once in 2 seconds. A network error keeps the tab on its page.
+A browser does not give the page the status of a failed `/ws` handshake. So, after such a failure, the script asks for its own file one time, and no more than once in 2 seconds. If the answer has the header, the script sends the tab to the login page. If that request gets a network error, the tab stays on its page.
 
 The credential comes from `secrets.token_urlsafe(32)`. The gate compares it with `secrets.compare_digest`, in constant time.
 
