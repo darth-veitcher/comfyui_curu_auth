@@ -707,6 +707,26 @@ def _mock_provider_app(key, holder: dict) -> web.Application:
     return app
 
 
+def _assert_moves_home_from_the_gate(response: Any, body: str) -> None:
+    """A successful callback sends the browser on to ``/`` from a page of the
+    gate itself, never with a redirect.
+
+    The browser reaches the callback from the provider, another site, so it
+    counts a redirect from the callback as part of a cross-site chain and
+    sends no ``SameSite=Strict`` cookie with the ``GET /`` that follows: the
+    new session is refused, and the person lands on the login page again
+    (found live on 2026-11-02, Authentik on its own domain, ComfyUI on a LAN
+    address). A navigation that the gate's own page starts is same-site, so
+    the browser sends the cookie.
+    """
+    assert response.status == 200
+    assert "Location" not in response.headers
+    assert response.content_type == "text/html"
+    assert '<meta http-equiv="refresh" content="0;url=/">' in body
+    assert '<a href="/">' in body
+    assert response.headers.get("Cache-Control") == "no-store"
+
+
 class TestOidcCallbackHandler:
     """The callback handler is the one place this feature mints a
     session -- it MUST reuse the *existing* `SessionStore`/`curu_auth`
@@ -754,8 +774,9 @@ class TestOidcCallbackHandler:
                     params={"code": "mock-auth-code", "state": in_flight.state},
                     allow_redirects=False,
                 )
+                body = await response.text()
 
-        assert response.status in (302, 303, 307)
+        _assert_moves_home_from_the_gate(response, body)
         cookie = response.cookies.get(COOKIE_NAME)
         assert cookie is not None
         assert sessions.is_valid(cookie.value)
@@ -1009,7 +1030,7 @@ class TestOidcCallbackCookieFollowsTheScheme:
                     allow_redirects=False,
                 )
 
-        assert response.status == 302
+        assert response.status == 200
         set_cookie = [
             value
             for value in response.headers.getall("Set-Cookie", [])
