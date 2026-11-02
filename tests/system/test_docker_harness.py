@@ -200,6 +200,10 @@ class TestTeardownAndRestartLeavesNoStaleState:
             ) as login_response:
                 assert login_response.status == 302
                 stale_cookie = login_response.cookies["curu_auth"].value
+            # The jar now holds the valid session cookie. Since ADR-006 it
+            # has no Secure flag over plain HTTP, so the jar sends it, and
+            # the wrong Bearer header below would pass with HTTP 200.
+            session.cookie_jar.clear()
 
             async with session.get(
                 BASE_URL, headers={"Authorization": "Bearer wrong", **blocked_client}
