@@ -59,3 +59,36 @@ async def test_a_valid_session_keeps_the_tab(gate: Gate, browser) -> None:
     await asyncio.sleep(2)
 
     assert page.url == f"{gate.url}/"
+
+
+async def test_the_gate_rejects_the_ws_handshake(gate: Gate, browser) -> None:
+    """Scenario: The gate rejects the ws handshake (rule T5).
+
+    A restart closes the socket and empties the store. The frontend opens
+    the socket again, and the gate rejects the handshake.
+    """
+    page = await open_comfyui(browser, gate, "?poll=0")
+    await page.wait_for_function("window.socketOpens >= 1")
+
+    gate.lose_sessions()
+    await gate.close_sockets()
+
+    assert await wait_for_path(page, LOGIN_PATH, LIMIT_SECONDS)
+
+
+async def test_no_more_than_one_probe_in_2_seconds(gate: Gate, browser) -> None:
+    """Rule T9: the frontend opens a socket each 300 ms after a close, but
+    the module sends no more than one probe in 2 seconds."""
+    page = await open_comfyui(browser, gate, "?poll=0")
+    await page.wait_for_function("window.socketOpens >= 1")
+    gate.refuse_ws = True
+    gate.seen.clear()
+
+    await gate.close_sockets()
+    await asyncio.sleep(3)
+
+    probes = [path for path in gate.seen if path.endswith("/session_loss.js")]
+    handshakes = [path for path in gate.seen if path == "/ws"]
+    assert len(handshakes) >= 5, "the double must open the socket again"
+    assert 1 <= len(probes) <= 2
+    assert page.url == f"{gate.url}/?poll=0"

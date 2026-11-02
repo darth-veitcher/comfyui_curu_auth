@@ -99,6 +99,11 @@ class Gate:
     sockets: set[web.WebSocketResponse] = field(default_factory=set)
     #: The paths of the requests that reached ComfyUI (the double).
     reached: list[str] = field(default_factory=list)
+    #: The path of each request that reached the server, before the gate.
+    seen: list[str] = field(default_factory=list)
+    #: When true, ``/ws`` refuses each handshake with its own HTTP 403, as
+    #: a proxy or a broken ComfyUI can. This is not a gate rejection.
+    refuse_ws: bool = False
     runner: web.AppRunner | None = None
     site: web.TCPSite | None = None
 
@@ -109,12 +114,13 @@ class Gate:
     def build_app(self) -> web.Application:
         app = web.Application(
             middlewares=[
+                self._count,
                 build_gate_middleware(
                     CREDENTIAL,
                     sessions=self.sessions,
                     rate_limiter=self.rate_limiter,
                     public_paths={LOGIN_PATH},
-                )
+                ),
             ]
         )
         login_get, login_post = build_login_routes(
@@ -128,6 +134,11 @@ class Gate:
         app.router.add_get("/api/other", self._other)
         app.router.add_get("/ws", self._ws)
         return app
+
+    @web.middleware
+    async def _count(self, request: web.Request, handler: Any) -> web.StreamResponse:
+        self.seen.append(request.path)
+        return await handler(request)
 
     async def _page(self, request: web.Request) -> web.Response:
         self.reached.append(request.path)
@@ -154,6 +165,8 @@ class Gate:
 
     async def _ws(self, request: web.Request) -> web.WebSocketResponse:
         self.reached.append(request.path)
+        if self.refuse_ws:
+            raise web.HTTPForbidden()
         ws = web.WebSocketResponse()
         await ws.prepare(request)
         self.sockets.add(ws)
