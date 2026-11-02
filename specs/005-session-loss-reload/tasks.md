@@ -81,8 +81,8 @@ This phase blocks User Story 1, because the module acts on the mark. It also ser
 
 **Independent Test**: run the default, `system` and `comfy_mcp` tiers. Compare the log lines with the patterns in `contrib/`.
 
-- [ ] T014-T [US3] Write a failing test for "The log line" in `tests/test_gate.py`. The `failregex` of `contrib/fail2ban/comfyui-curu-auth.conf` must match each "authentication failure" line of the tests.
-- [ ] T014-I [US3] Fix `gate.py` until T014-T passes. If T014-T passes at once, record that in the commit message of T014-T.
+- [x] T014-T [US3] Write a failing test for "The log line" in `tests/test_gate.py`. The `failregex` of `contrib/fail2ban/comfyui-curu-auth.conf` must match each "authentication failure" line of the tests.
+- [x] T014-I [US3] Fix `gate.py` until T014-T passes. If T014-T passes at once, record that in the commit message of T014-T.
 - [ ] T015 [US3] Run `uv run pytest`, `uv run --group live pytest -m system` and `uv run --group live pytest -m comfy_mcp` with no change to existing assertions, for "A wrong Bearer header" and "The static credential" (SC-006).
 
 ---

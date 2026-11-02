@@ -11,6 +11,7 @@ from __future__ import annotations
 import asyncio
 import datetime
 import ipaddress
+import re
 import ssl
 from pathlib import Path
 
@@ -2024,3 +2025,69 @@ class TestAGateRejectionIsMarked:
             response = await client.post(LOGIN_PATH, data={"token": "wrong"})
             assert response.status == 401
             assert _MARK[0] not in response.headers
+
+
+def _contrib_patterns() -> list[re.Pattern[str]]:
+    """The fail2ban ``failregex`` and the crowdsec grok pattern of
+    ``contrib/``, as Python regular expressions."""
+    root = Path(__file__).resolve().parents[1] / "contrib"
+    fail2ban = (root / "fail2ban" / "comfyui-curu-auth.conf").read_text()
+    failregex = re.search(r"^failregex = (.+)$", fail2ban, re.MULTILINE)
+    assert failregex is not None
+    crowdsec = (root / "crowdsec" / "parsers" / "comfyui-curu-auth.yaml").read_text()
+    grok = re.search(r"pattern: '(.+)'$", crowdsec, re.MULTILINE)
+    assert grok is not None
+    host = r"(?P<host>[0-9a-fA-F.:]+)"
+    return [
+        re.compile(failregex.group(1).replace("<HOST>", host)),
+        re.compile(re.escape(grok.group(1)).replace(r"%\{IP:source_ip\}", host)),
+    ]
+
+
+class TestTheContribPatternsMatchEachLogLine:
+    """Scenario: The log line (SC-007). fail2ban and crowdsec match each
+    "authentication failure" line of the middleware, and read the address
+    of the client from it."""
+
+    async def test_each_rejection_line_matches_both_patterns(
+        self, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        sessions = SessionStore()
+        app = web.Application(
+            middlewares=[
+                build_gate_middleware(
+                    "expected-token", sessions=sessions, token_check=_refuse
+                )
+            ]
+        )
+        app.router.add_get("/api/jobs", _ok_handler)
+        app.router.add_get("/ws", _ws_handler)
+        address = {"X-Forwarded-For": "203.0.113.7"}
+
+        with caplog.at_level("WARNING", logger="comfyui_curu_auth"):
+            async with TestClient(TestServer(app)) as client:
+                await client.get("/api/jobs", headers=address)
+                await client.get("/ws", headers=address)
+                await client.get(
+                    "/api/jobs", headers={**address, "Cookie": f"{COOKIE_NAME}=stale"}
+                )
+                await client.get(
+                    "/api/jobs",
+                    headers={**address, "Authorization": "Bearer wrong-token"},
+                )
+                await client.get(
+                    "/api/jobs",
+                    headers={**address, "Authorization": "Bearer aaa.bbb.ccc"},
+                )
+
+        lines = [
+            r.getMessage()
+            for r in caplog.records
+            if "authentication failure" in r.getMessage()
+        ]
+        assert len(lines) == 5
+        for pattern in _contrib_patterns():
+            for line in lines:
+                match = pattern.search(f"[WARNING] {line}")
+                assert match is not None, (pattern.pattern, line)
+                assert match.group("host") == "203.0.113.7"
