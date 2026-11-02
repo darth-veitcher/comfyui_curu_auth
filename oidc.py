@@ -63,6 +63,7 @@ try:
         SessionStore,
         TokenCheckUnavailableError,
         client_key,
+        request_origin,
         set_session_cookie,
     )
 except ImportError:
@@ -76,6 +77,7 @@ except ImportError:
         SessionStore,
         TokenCheckUnavailableError,
         client_key,
+        request_origin,
         set_session_cookie,
     )
 
@@ -161,6 +163,11 @@ class OIDCConfig:
     (FR-009). Never constructed partially filled.
 
     ``allowlist`` defaults to the empty allowlist, which allows nobody.
+
+    ``redirect_uri`` is the default redirect URI, the first entry of the
+    setting. ``other_redirect_uris`` holds the other entries, for a ComfyUI
+    reached at more than one origin (issue #25). :meth:`redirect_uri_for`
+    chooses among them; nothing else may.
     """
 
     issuer_url: str
@@ -169,6 +176,30 @@ class OIDCConfig:
     redirect_uri: str
     allowlist: LoginAllowlist = LoginAllowlist()
     scopes: tuple[str, ...] = DEFAULT_SCOPES
+    other_redirect_uris: tuple[str, ...] = ()
+
+    @property
+    def redirect_uris(self) -> tuple[str, ...]:
+        """Each configured redirect URI, the default first."""
+
+        return (self.redirect_uri, *self.other_redirect_uris)
+
+    def redirect_uri_for(self, origin: str) -> str:
+        """The configured redirect URI whose origin is ``origin``, or the
+        default when none is.
+
+        ``origin`` comes from request headers that any client can write
+        (:func:`gate.request_origin`). So the answer is always one of
+        :attr:`redirect_uris`: a forged header can pick another configured
+        URI, never a URI of its own (issue #25).
+        """
+
+        wanted = _origin_key(origin)
+        if wanted is not None:
+            for uri in self.redirect_uris:
+                if _origin_key(uri) == wanted:
+                    return uri
+        return self.redirect_uri
 
 
 class OIDCConfigError(Exception):
@@ -178,6 +209,50 @@ class OIDCConfigError(Exception):
     never lets it escape: ComfyUI would then skip the node, and the gate
     would be off (ADR-007).
     """
+
+
+_DEFAULT_PORTS = {"http": 80, "https": 443}
+
+
+def _origin_key(url: str) -> tuple[str, str, int] | None:
+    """``(scheme, host, port)`` of ``url``, for a comparison of origins.
+
+    The host is in lower case, and a missing port is the default port of the
+    scheme. ``None`` for a URL that is not ``http`` or ``https``, has no
+    host, or has a bad port.
+    """
+
+    try:
+        parts = urlsplit(url)
+        port = parts.port
+    except ValueError:
+        return None
+    scheme = parts.scheme.lower()
+    if scheme not in _DEFAULT_PORTS or not parts.hostname:
+        return None
+    return scheme, parts.hostname, port or _DEFAULT_PORTS[scheme]
+
+
+def _redirect_uris(setting: str) -> tuple[str, ...]:
+    """The entries of the redirect URI setting, in order, each one time.
+
+    Raises :class:`OIDCConfigError` for an entry that is not an ``http`` or
+    ``https`` URL with a host, or whose path does not end in
+    :data:`OIDC_CALLBACK_PATH`: the provider would send the browser to a
+    route that is not the callback.
+    """
+
+    uris = tuple(dict.fromkeys(_split(setting)))
+    for uri in uris:
+        if _origin_key(uri) is None or not urlsplit(uri).path.endswith(
+            OIDC_CALLBACK_PATH
+        ):
+            raise OIDCConfigError(
+                "OIDC login is off: each entry of "
+                "COMFYUI_CURU_AUTH_OIDC_REDIRECT_URI must be an http or https "
+                f"URL that ends in {OIDC_CALLBACK_PATH}; got {uri!r}"
+            )
+    return uris
 
 
 def _split(value: str | None) -> list[str]:
@@ -240,13 +315,15 @@ def resolve_oidc_config(
             "COMFYUI_CURU_AUTH_OIDC_ALLOW_ANY_USER=true to let the provider "
             "decide who can log in"
         )
+    default_uri, *other_uris = _redirect_uris(redirect_uri)
     return OIDCConfig(
         issuer_url=issuer_url,
         client_id=client_id,
         client_secret=client_secret,
-        redirect_uri=redirect_uri,
+        redirect_uri=default_uri,
         allowlist=allowlist,
         scopes=_scopes(scopes),
+        other_redirect_uris=tuple(other_uris),
     )
 
 
@@ -369,6 +446,9 @@ class InFlightAuthRequest:
     nonce: str
     pkce_verifier: str
     created_at: float
+    #: The ``redirect_uri`` of the authorize request. The token exchange
+    #: must send the same value (RFC 6749, section 4.1.3).
+    redirect_uri: str = ""
 
 
 class AuthorizationRequestStore:
@@ -392,12 +472,13 @@ class AuthorizationRequestStore:
         self._max_size = max_size
         self._entries: dict[str, InFlightAuthRequest] = {}
 
-    def create(self) -> InFlightAuthRequest:
+    def create(self, *, redirect_uri: str = "") -> InFlightAuthRequest:
         entry = InFlightAuthRequest(
             state=secrets.token_urlsafe(32),
             nonce=secrets.token_urlsafe(32),
             pkce_verifier=secrets.token_urlsafe(64),
             created_at=time.monotonic(),
+            redirect_uri=redirect_uri,
         )
         self._entries[entry.state] = entry
         while len(self._entries) > self._max_size:
@@ -429,17 +510,24 @@ def build_authorization_url(
     config: OIDCConfig,
     discovery: dict[str, Any],
     store: AuthorizationRequestStore,
+    *,
+    redirect_uri: str | None = None,
 ) -> str:
     """Build the redirect URL to the identity provider's authorization
     endpoint, recording a matching :class:`InFlightAuthRequest` in
     ``store`` keyed by the `state` it generates. The scope is
     ``config.scopes`` (spec 003).
+
+    ``redirect_uri`` is one of ``config.redirect_uris``, chosen by
+    :meth:`OIDCConfig.redirect_uri_for`; ``None`` means the default. The
+    entry in ``store`` keeps it for the token exchange (issue #25).
     """
 
-    in_flight = store.create()
+    chosen = redirect_uri or config.redirect_uri
+    in_flight = store.create(redirect_uri=chosen)
     query = {
         "client_id": config.client_id,
-        "redirect_uri": config.redirect_uri,
+        "redirect_uri": chosen,
         "response_type": "code",
         "scope": " ".join(config.scopes),
         "state": in_flight.state,
@@ -933,6 +1021,7 @@ async def _exchange_code_for_token(
     code: str,
     *,
     code_verifier: str,
+    redirect_uri: str | None = None,
     timeout: float = 10.0,
 ) -> dict[str, Any]:
     """POST the authorization code to the provider's token endpoint.
@@ -945,12 +1034,16 @@ async def _exchange_code_for_token(
     authorization request's `code_challenge` from (RFC 7636) -- a real
     provider (Authelia included) rejects the exchange with a 400 if it's
     missing or doesn't match, confirmed live.
+
+    ``redirect_uri`` MUST be the value that the authorization request sent
+    (RFC 6749, section 4.1.3) -- the one that the same
+    :class:`InFlightAuthRequest` keeps. ``None`` means the default.
     """
 
     data = {
         "grant_type": "authorization_code",
         "code": code,
-        "redirect_uri": config.redirect_uri,
+        "redirect_uri": redirect_uri or config.redirect_uri,
         "client_id": config.client_id,
         "client_secret": config.client_secret,
         "code_verifier": code_verifier,
@@ -1039,7 +1132,11 @@ def build_oidc_routes(
             raise web.HTTPServiceUnavailable(
                 text="identity provider unreachable; see the ComfyUI log"
             ) from exc
-        raise web.HTTPFound(build_authorization_url(config, discovery, store))
+        # The origin only chooses among the configured URIs (issue #25).
+        redirect_uri = config.redirect_uri_for(request_origin(request))
+        raise web.HTTPFound(
+            build_authorization_url(config, discovery, store, redirect_uri=redirect_uri)
+        )
 
     def _reject_callback(
         key: str, *, reason: str = "", cause: BaseException | None = None
@@ -1100,7 +1197,11 @@ def build_oidc_routes(
         try:
             discovery = await fetch_discovery_document(config.issuer_url)
             token_response = await _exchange_code_for_token(
-                config, discovery, code, code_verifier=in_flight.pkce_verifier
+                config,
+                discovery,
+                code,
+                code_verifier=in_flight.pkce_verifier,
+                redirect_uri=in_flight.redirect_uri,
             )
             id_token = token_response.get("id_token")
             if not isinstance(id_token, str):

@@ -636,7 +636,7 @@ class TestStartWithNoAllowlist:
                     "COMFYUI_CURU_AUTH_OIDC_ISSUER_URL": "https://idp.example.com/",
                     "COMFYUI_CURU_AUTH_OIDC_CLIENT_ID": CLIENT_ID,
                     "COMFYUI_CURU_AUTH_OIDC_CLIENT_SECRET": CLIENT_SECRET,
-                    "COMFYUI_CURU_AUTH_OIDC_REDIRECT_URI": "https://h/cb",
+                    "COMFYUI_CURU_AUTH_OIDC_REDIRECT_URI": f"https://h{CALLBACK}",
                 },
             )
 
@@ -661,7 +661,7 @@ class TestStartWithNoAllowlist:
                 "COMFYUI_CURU_AUTH_OIDC_ISSUER_URL": "https://idp.example.com/",
                 "COMFYUI_CURU_AUTH_OIDC_CLIENT_ID": CLIENT_ID,
                 "COMFYUI_CURU_AUTH_OIDC_CLIENT_SECRET": CLIENT_SECRET,
-                "COMFYUI_CURU_AUTH_OIDC_REDIRECT_URI": "https://h/cb",
+                "COMFYUI_CURU_AUTH_OIDC_REDIRECT_URI": f"https://h{CALLBACK}",
                 "COMFYUI_CURU_AUTH_OIDC_ALLOWED_SUBJECTS": "user-1",
             },
         )
@@ -737,7 +737,7 @@ class TestTheScopes:
                     "COMFYUI_CURU_AUTH_OIDC_ISSUER_URL": issuer.issuer,
                     "COMFYUI_CURU_AUTH_OIDC_CLIENT_ID": CLIENT_ID,
                     "COMFYUI_CURU_AUTH_OIDC_CLIENT_SECRET": CLIENT_SECRET,
-                    "COMFYUI_CURU_AUTH_OIDC_REDIRECT_URI": "https://h/cb",
+                    "COMFYUI_CURU_AUTH_OIDC_REDIRECT_URI": f"https://h{CALLBACK}",
                     "COMFYUI_CURU_AUTH_OIDC_ALLOW_ANY_USER": "true",
                     "COMFYUI_CURU_AUTH_OIDC_SCOPES": "profile groups",
                 },

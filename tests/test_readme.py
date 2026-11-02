@@ -36,12 +36,14 @@ NOT_RUN = {
 
 _SETTINGS_TEST = "test_each_setting_of_the_readme_is_read"
 _CREDENTIAL_TEST = "test_the_credential_example_makes_a_credential"
+_REDIRECT_URIS_TEST = "test_the_list_of_redirect_uris_gives_two_uris"
 
 #: A text that only one block holds -> the test below that runs that block.
 RUN = {
     "secrets.token_urlsafe(32)": _CREDENTIAL_TEST,
     "COMFYUI_CURU_AUTH_OIDC_ISSUER_URL=": _SETTINGS_TEST,
     "COMFYUI_CURU_AUTH_OIDC_ALLOWED_SUBJECTS=": _SETTINGS_TEST,
+    'COMFYUI_CURU_AUTH_OIDC_REDIRECT_URI="http://': _REDIRECT_URIS_TEST,
 }
 
 
@@ -66,6 +68,26 @@ def test_the_credential_example_makes_a_credential() -> None:
     )
     # token_urlsafe(32): 32 bytes in base64url with no padding.
     assert len(result.stdout.strip()) == 43
+
+
+def test_the_list_of_redirect_uris_gives_two_uris() -> None:
+    """The example of more than one address passes the setting check, and
+    its first URL is the default."""
+    from oidc import resolve_oidc_config
+
+    match = re.search(r'COMFYUI_CURU_AUTH_OIDC_REDIRECT_URI="(http://[^"]+)"', README)
+    assert match is not None
+    config = resolve_oidc_config(
+        issuer_url="https://idp.example.com/",
+        client_id="client",
+        client_secret="secret",
+        redirect_uri=match.group(1),
+        allow_any_user="true",
+    )
+
+    assert config is not None
+    assert len(config.redirect_uris) == 2
+    assert config.redirect_uri == match.group(1).split(",")[0]
 
 
 def test_each_setting_of_the_readme_is_read() -> None:

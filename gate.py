@@ -165,6 +165,28 @@ def browser_used_https(request: web.Request) -> bool:
     return False
 
 
+def request_origin(request: web.Request) -> str:
+    """The origin that the *browser* used for ``request``:
+    ``<scheme>://<host>``, with the port when the host gives one.
+
+    The scheme comes from :func:`browser_used_https`. The host comes from
+    the left-most ``X-Forwarded-Host``, then RFC 7239's ``Forwarded: host=``,
+    then ``Host`` -- the same order and the same left-most reading as the
+    scheme. A forged header can move the answer to any host, so a caller
+    must only *choose* with it among values that the operator configured,
+    never build a URL from it (issue #25).
+    """
+
+    scheme = "https" if browser_used_https(request) else "http"
+    forwarded_host = request.headers.get("X-Forwarded-Host", "").split(",")[0]
+    host = forwarded_host.strip()
+    if not host and request.forwarded:
+        host = request.forwarded[0].get("host", "").strip()
+    if not host:
+        host = request.host
+    return f"{scheme}://{host}"
+
+
 def set_session_cookie(
     response: web.StreamResponse, request: web.Request, value: str, *, max_age: int
 ) -> None:
@@ -961,5 +983,6 @@ __all__ = [
     "build_login_routes",
     "client_key",
     "generate_credential",
+    "request_origin",
     "set_session_cookie",
 ]

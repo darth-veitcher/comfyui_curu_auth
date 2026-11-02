@@ -19,7 +19,7 @@ The gate is a confidential client. It uses the authorization code flow: the brow
 | `exp` and `iat` in the ID token | The gate refuses an ID token without them. |
 | `azp` (the authorized party) equal to the client id | This applies when the ID token has more than one audience (`aud`), or has `azp`. |
 | A clock that is correct to 60 seconds | The gate allows 60 seconds of difference for `exp`, `iat` and `nbf` (the first valid time). |
-| A redirect URI of `https://<your ComfyUI host>/curu-auth/oidc/callback` | Register it on the client. Use the same value for `COMFYUI_CURU_AUTH_OIDC_REDIRECT_URI`. |
+| A redirect URI of `https://<your ComfyUI host>/curu-auth/oidc/callback` | Register it on the client. Use the same value for `COMFYUI_CURU_AUTH_OIDC_REDIRECT_URI`. For more than one address, register one URI for each address, and give all of them in the setting. [Log in at more than one address](../README.md#log-in-through-your-identity-provider-at-more-than-one-address) gives the proxy settings. |
 
 To find the issuer, open the discovery document of the provider and copy its `issuer` value. Do not remove or add a `/` at the end.
 

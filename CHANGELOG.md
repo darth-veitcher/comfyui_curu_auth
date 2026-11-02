@@ -18,6 +18,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- The OIDC login works at more than one address of the same ComfyUI, for
+  example a LAN address and a name behind a reverse proxy.
+  `COMFYUI_CURU_AUTH_OIDC_REDIRECT_URI` accepts a list with a comma between the
+  URLs. Each login uses the URL whose origin is the origin of the request, and
+  the first URL when none matches. The token exchange sends the same URL again.
+  One URL works as before.
 - Resource-server mode: the Bearer path also accepts a short-lived OIDC access
   token of the configured issuer. Set `COMFYUI_CURU_AUTH_OIDC_AUDIENCE` (with the
   issuer) to turn it on, and `COMFYUI_CURU_AUTH_OIDC_REQUIRED_SCOPES` to require
@@ -34,6 +40,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   A valid token passes also during a wait, so the immediate retry of comfy-mcp
   after a 401 is not a 429.
 - The `rauthy` test tier gets a `client_credentials` token and calls `GET /queue`.
+
+### Changed
+
+- The OIDC login stays off, with a message, when a redirect URI is not an
+  `http` or `https` URL that ends in `/curu-auth/oidc/callback`. Before, such
+  a login started, and then failed when the identity provider sent the
+  browser back.
 
 <!-- version list -->
 
