@@ -83,16 +83,16 @@ This phase blocks User Story 1, because the module acts on the mark. It also ser
 
 - [x] T014-T [US3] Write a failing test for "The log line" in `tests/test_gate.py`. The `failregex` of `contrib/fail2ban/comfyui-curu-auth.conf` must match each "authentication failure" line of the tests.
 - [x] T014-I [US3] Fix `gate.py` until T014-T passes. If T014-T passes at once, record that in the commit message of T014-T.
-- [ ] T015 [US3] Run `uv run pytest`, `uv run --group live pytest -m system` and `uv run --group live pytest -m comfy_mcp` with no change to existing assertions, for "A wrong Bearer header" and "The static credential" (SC-006).
+- [x] T015 [US3] Run `uv run pytest`, `uv run --group live pytest -m system` and `uv run --group live pytest -m comfy_mcp` with no change to existing assertions, for "A wrong Bearer header" and "The static credential" (SC-006).
 
 ---
 
 ## Phase 6: The real ComfyUI frontend (rule T12)
 
-- [ ] T016-T [US1] Write a failing test in `tests/system/test_session_loss.py`. Log in with Chromium, and run `docker compose restart comfyui`. Expect the login page within 5 seconds after the health check passes (SC-001). Expect no more than 10 "authentication failure" lines (SC-002).
-- [ ] T016-I [US1] Fix `web/session_loss.js` until T016-T passes against ComfyUI v0.27.0.
-- [ ] T017-T [US1] Write a failing test in `tests/system/test_session_loss.py`: an unauthenticated `GET /extensions/comfyui_curu_auth/session_loss.js` gets HTTP 401 (article II, FR-011).
-- [ ] T017-I [US1] Fix `__init__.py` until T017-T passes. If T017-T passes at once, record that in the commit message of T017-T.
+- [x] T016-T [US1] Write a failing test in `tests/system/test_session_loss.py`. Log in with Chromium, and run `docker compose restart comfyui`. Expect the login page within 5 seconds after the health check passes (SC-001). Expect no more than 10 "authentication failure" lines (SC-002).
+- [x] T016-I [US1] Fix `web/session_loss.js` until T016-T passes against ComfyUI v0.27.0.
+- [x] T017-T [US1] Write a failing test in `tests/system/test_session_loss.py`: an unauthenticated `GET /extensions/comfyui_curu_auth/session_loss.js` gets HTTP 401 (article II, FR-011).
+- [x] T017-I [US1] Fix `__init__.py` until T017-T passes. If T017-T passes at once, record that in the commit message of T017-T.
 
 ---
 
