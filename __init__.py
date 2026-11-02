@@ -11,6 +11,12 @@ same app, so a human can open ComfyUI's own UI directly in a browser (no
 way to attach a custom header) by logging in with the printed credential
 once.
 
+``WEB_DIRECTORY`` gives ComfyUI one script for its page,
+``web/session_loss.js``. It sends an open tab to ``LOGIN_PATH`` when the
+gate rejects its session, for example after a restart (spec 005, ADR-009).
+It is a constant string, so it cannot raise here. If ComfyUI cannot load
+the script, the gate still works.
+
 ``server`` is ComfyUI's own module -- it only resolves inside a real
 ComfyUI installation, so this file's own hermetic test coverage
 (``tests/test_gate.py``) never imports this module at all, only
@@ -38,7 +44,7 @@ import logging
 import os
 from pathlib import Path
 
-WEB_DIRECTORY = None  # no JS of its own -- this is a server-side-only gate
+WEB_DIRECTORY = "./web"  # web/session_loss.js (spec 005, ADR-009)
 NODE_CLASS_MAPPINGS: dict[str, object] = {}
 NODE_DISPLAY_NAME_MAPPINGS: dict[str, str] = {}
 

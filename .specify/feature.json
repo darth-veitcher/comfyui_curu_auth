@@ -1,1 +1,3 @@
-{"feature_directory":"specs/004-oidc-access-tokens"}
+{
+  "feature_directory": "specs/005-session-loss-reload"
+}

@@ -12,9 +12,10 @@ comfyui_curu_auth is a ComfyUI custom node that gates each route of ComfyUI with
 | Lint and format | `uv run ruff check --fix && uv run ruff format` |
 | Check types | `uv run ty check` |
 | Run the default tests | `uv run pytest` |
-| Run the ComfyUI and Authelia tier (marker `system`) | `uv run pytest -m system` |
+| Run the ComfyUI and Authelia tier (marker `system`) | `uv run --group live pytest -m system` |
+| Run the script of the tab in Chromium (marker `browser`) | `uv run --group live pytest -m browser` |
 | Run the rauthy tier (marker `rauthy`) | `uv run --group live pytest -m rauthy` |
-| Install Chromium for the rauthy tier | `uv run --group live playwright install chromium` |
+| Install Chromium for the system, browser and rauthy tiers | `uv run --group live playwright install chromium` |
 | Run comfy-mcp against the gate and rauthy (marker `comfy_mcp`) | `uv run --group live pytest -m comfy_mcp` |
 | Check the project health | `beacon doctor --strict` |
 | Check the documentation | `beacon docs check` |
@@ -39,10 +40,12 @@ The articles are in [the constitution](.specify/memory/constitution.md).
 | Path | Contents |
 |---|---|
 | `gate.py` | The credential, the middleware, the sessions, the rate limiter and the login form. |
+| `web/session_loss.js` | The script that ComfyUI loads into its page. It sends an open tab to the login page when the gate rejects its session. |
 | `oidc.py` | The OIDC login (discovery, keys, ID-token rules, the allowlist, the routes) and the access-token check with its key cache. |
 | `__init__.py` | The wiring that ComfyUI imports. It reads the environment. |
 | `tests/` | The default tests. `tests/support/fake_issuer.py` is the fake OIDC provider. |
 | `tests/system/` | The `system` tier. It uses `docker-compose.yml` and `docker/` in the root of the repository. |
+| `tests/browser/` | The `browser` tier. It runs `web/session_loss.js` in Chromium against the real gate and a small test page that acts like the ComfyUI page. |
 | `tests/live/` | The `rauthy` tier, and the `comfy_mcp` tier in `test_comfy_mcp_end_to_end.py`. |
 | `contrib/` | The fail2ban and crowdsec configurations. |
 | `docs/` | The guides for people. |
@@ -51,7 +54,7 @@ The articles are in [the constitution](.specify/memory/constitution.md).
 
 ## Current work
 
-Active spec: [specs/004-oidc-access-tokens/spec.md](specs/004-oidc-access-tokens/spec.md) and its [plan.md](specs/004-oidc-access-tokens/plan.md). `beacon bullet status` names the bullet of the current branch.
+Active spec: [specs/005-session-loss-reload/spec.md](specs/005-session-loss-reload/spec.md) and its [plan.md](specs/005-session-loss-reload/plan.md). `beacon bullet status` names the bullet of the current branch.
 
 ## Known problems
 
