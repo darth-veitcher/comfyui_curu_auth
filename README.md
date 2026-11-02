@@ -102,7 +102,7 @@ A successful login gives the same `curu_auth` cookie as the credential form. The
 | `COMFYUI_CURU_AUTH_OIDC_ISSUER_URL` | The issuer, exactly as the discovery document gives it. | none |
 | `COMFYUI_CURU_AUTH_OIDC_CLIENT_ID` | The client id at the provider. | none |
 | `COMFYUI_CURU_AUTH_OIDC_CLIENT_SECRET` | The client secret at the provider. | none |
-| `COMFYUI_CURU_AUTH_OIDC_REDIRECT_URI` | The callback URL that the provider sends the browser to. For more than one address, give a list with a comma between the URLs. | none |
+| `COMFYUI_CURU_AUTH_OIDC_REDIRECT_URI` | The callback URL that the provider sends the browser to. For more than one address, give a list with a comma or a space between the URIs. | none |
 | `COMFYUI_CURU_AUTH_OIDC_ALLOWED_SUBJECTS` | The `sub` values that can log in, with a comma or a space between them. | empty |
 | `COMFYUI_CURU_AUTH_OIDC_ALLOWED_EMAILS` | The emails that can log in, with a comma or a space between them. An email matches only when `email_verified` is true. Capital letters do not matter. | empty |
 | `COMFYUI_CURU_AUTH_OIDC_ALLOWED_DOMAIN` | One Google Workspace domain, compared with the `hd` claim. | empty |
@@ -136,7 +136,7 @@ A refused callback gives HTTP 401 and counts as a failed attempt.
 Do this when people open the same ComfyUI at more than one address. For example, they use a LAN address at home and a name behind a reverse proxy from outside. With one redirect URI, the provider always sends the browser back to that one address. A login from the other address then fails.
 
 1. Register one redirect URI for each address on the client at the identity provider.
-2. Give all of them in one setting, with a comma between them:
+2. Give all of them in one setting, with a comma or a space between them:
 
    ```bash
    export COMFYUI_CURU_AUTH_OIDC_REDIRECT_URI="http://192.168.1.117:8188/curu-auth/oidc/callback,https://comfyui.example.com/curu-auth/oidc/callback"
@@ -145,11 +145,11 @@ Do this when people open the same ComfyUI at more than one address. For example,
 3. Restart ComfyUI.
 4. Log in from each address. Each login must come back to the address where it started.
 
-The gate compares the address of the browser with each URI in the list. It compares the scheme, the host and the port. The gate reads the address from `X-Forwarded-Proto`, `X-Forwarded-Host` or `Forwarded` when a proxy sends them, and else from `Host`. If no URI matches, the gate uses the first URI.
+The gate compares the address that the browser opened with each URI in the list. It compares the scheme, the host and the port. The gate reads the scheme from `X-Forwarded-Proto` or `Forwarded`, and else from the connection. It reads the host from `X-Forwarded-Host` or `Forwarded`, and else from `Host`. If no URI matches, the gate uses the first URI.
 
-Your proxy must send `X-Forwarded-Host`, or keep the `Host` header of the browser. Traefik and Caddy keep it. nginx needs `proxy_set_header Host $host;`.
+Your proxy must send the scheme and the host of the browser. Traefik and Caddy do this. In nginx, add `proxy_set_header Host $http_host;` and `proxy_set_header X-Forwarded-Proto $scheme;`. [Use HTTPS or plain HTTP](#use-https-or-plain-http) tells you how to check the scheme.
 
-A client can change these headers. It can only select another URI from your list, never a URL of its own. The identity provider also refuses each URI that is not registered on the client.
+A client can change these headers. It can only select another URI from your list, never a URI of its own. The identity provider also refuses each URI that is not registered on the client.
 
 ## Let a program call ComfyUI with an access token
 
@@ -289,6 +289,7 @@ The quality gates are `uv run ruff check`, `uv run ruff format`, `uv run ty chec
 | Term | Meaning |
 |---|---|
 | Access token | A short-lived JWT that the identity provider gives to a program. |
+| Address (of ComfyUI) | The scheme, the host and the port that the browser uses to open ComfyUI, for example `https://comfyui.example.com`. |
 | Allowlist | The list of people who can get a session through the OIDC login. |
 | Audience (`aud`) | The value in `aud` that names who a token is for. For an ID token, it must hold the client id. For an access token, it must hold `COMFYUI_CURU_AUTH_OIDC_AUDIENCE`. |
 | `azp` | The authorized party: the client that the identity provider gave the ID token to. |
@@ -307,6 +308,7 @@ The quality gates are `uv run ruff check`, `uv run ruff format`, `uv run ty chec
 | `exp`, `iat`, `nbf` | The claims for the end of the token, the time it was made, and its first valid time. |
 | `iss` | The issuer claim of a token. |
 | JWT | A signed token in three parts with a `.` between them. |
+| LAN | The local network of your home or office. |
 | `hd` | The hosted-domain claim of Google. Only a Google Workspace account has it. |
 | HMAC | A signature with a shared secret, for example HS256. The gate refuses it. |
 | ID token | The signed token that the identity provider gives after a login. It names the person. |
@@ -317,6 +319,7 @@ The quality gates are `uv run ruff check`, `uv run ruff format`, `uv run ty chec
 | Opaque token | A token that is not a JWT, so the gate cannot read it. |
 | PKCE | Proof Key for Code Exchange. It stops the use of a stolen login code. |
 | Redirect URI | The URL of the gate that the identity provider sends the browser back to. |
+| Reverse proxy | A server in front of ComfyUI that gets each request from the browser and sends it on to ComfyUI, for example Traefik, Caddy or nginx. |
 | Scope | A name for the data or the access that a login or a program asks for, for example `email`. A token holds its scopes in `scope` or `scp`. |
 | Session cookie | The `curu_auth` cookie that keeps a browser logged in for 30 days. |
 | `scp` | Another name of the scope claim, for some identity providers. It can be a list. |

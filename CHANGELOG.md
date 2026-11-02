@@ -45,7 +45,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - The OIDC login stays off, with a message, when a redirect URI is not an
   `http` or `https` URL that ends in `/curu-auth/oidc/callback`. Before, such
-  a login started and then failed at the callback.
+  a login started, and then failed when the identity provider sent the
+  browser back.
 
 <!-- version list -->
 
