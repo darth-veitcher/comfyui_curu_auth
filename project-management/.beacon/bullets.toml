@@ -5,3 +5,8 @@
 # the bullet survives a fresh clone (`beacon doctor`'s active-bullet check then
 # works in CI) and no per-branch file is left behind on the trunk after a merge.
 # `git log -p` on this file is the audit trail of who started which bullet when.
+
+[bullets."fix/oidc-callback-same-site-hop"]
+title = "OIDC callback keeps the Strict cookie across the provider's redirect"
+owner = "unknown"
+started = "2026-11-02T08:43:43+00:00"

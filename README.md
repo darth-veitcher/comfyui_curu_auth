@@ -94,7 +94,7 @@ An identity provider is a service that logs people in, for example rauthy, Authe
 
 6. Restart ComfyUI. The login page now has "Log in with your identity provider".
 
-A successful login gives the same `curu_auth` cookie as the credential form. [Connect an identity provider](docs/oidc-providers.md) gives the steps for rauthy, Authentik, Keycloak, Auth0, Okta, Microsoft Entra ID, Google and Authelia.
+A successful login gives the same `curu_auth` cookie as the credential form. The gate then shows a short page, "Signed in", which opens ComfyUI. After a login on another site, the browser does not send a `SameSite=Strict` cookie with a redirect from the callback. It sends the cookie when a page on the ComfyUI site starts the next request. [Connect an identity provider](docs/oidc-providers.md) gives the steps for rauthy, Authentik, Keycloak, Auth0, Okta, Microsoft Entra ID, Google and Authelia.
 
 | Setting | Meaning | Default |
 |---|---|---|

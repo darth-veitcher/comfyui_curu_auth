@@ -64,6 +64,20 @@ class Rauthy:
     gate_port: int
 
     @property
+    def gate_url(self) -> str:
+        """Where the browser opens the gate: ``localhost``, another site than
+        rauthy's ``127.0.0.1``.
+
+        A browser counts a different host as a different site, port aside.
+        With both on ``127.0.0.1`` the login is same-site end to end, so a
+        ``SameSite=Strict`` cookie lost on the way back from the provider
+        goes unseen -- as it did until 2026-11-02, when it locked a real
+        Authentik login out. The gate still listens on ``127.0.0.1``, which
+        ``localhost`` reaches.
+        """
+        return f"http://localhost:{self.gate_port}"
+
+    @property
     def audience(self) -> str:
         """The audience of the gate: its own URL, as a resource indicator."""
         return f"http://127.0.0.1:{self.gate_port}"
@@ -92,7 +106,7 @@ def _bootstrap(directory: Path, gate_port: int) -> None:
         "id": LOGIN_CLIENT_ID,
         "name": LOGIN_CLIENT_ID,
         "secret": {"Plain": LOGIN_CLIENT_SECRET},
-        "redirect_uris": [f"http://127.0.0.1:{gate_port}{CALLBACK}"],
+        "redirect_uris": [f"http://localhost:{gate_port}{CALLBACK}"],
         "enabled": True,
         "flows_enabled": ["authorization_code"],
         "access_token_alg": "RS256",
@@ -261,9 +275,7 @@ async def start_gate(
                 "COMFYUI_CURU_AUTH_OIDC_ISSUER_URL": rauthy.issuer,
                 "COMFYUI_CURU_AUTH_OIDC_CLIENT_ID": LOGIN_CLIENT_ID,
                 "COMFYUI_CURU_AUTH_OIDC_CLIENT_SECRET": LOGIN_CLIENT_SECRET,
-                "COMFYUI_CURU_AUTH_OIDC_REDIRECT_URI": (
-                    f"http://127.0.0.1:{rauthy.gate_port}{CALLBACK}"
-                ),
+                "COMFYUI_CURU_AUTH_OIDC_REDIRECT_URI": f"{rauthy.gate_url}{CALLBACK}",
                 **env,
             },
         )
