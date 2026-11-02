@@ -96,6 +96,8 @@ class FakeIssuer:
         self.nonce = "fake-nonce"
         #: A body that replaces the JWKS, for a test of a malformed key set.
         self.jwks_override: Any = None
+        #: The form of each request to the token endpoint, oldest first.
+        self.token_requests: list[dict[str, str]] = []
         self._server: TestServer | None = None
 
     def add_key(self, kid: str, alg: str) -> None:
@@ -161,6 +163,7 @@ class FakeIssuer:
 
         async def token(request: web.Request) -> web.Response:
             form = await request.post()
+            self.token_requests.append({k: str(v) for k, v in form.items()})
             if form.get("client_id") != CLIENT_ID or not form.get("code_verifier"):
                 return web.json_response({"error": "invalid_grant"}, status=400)
             id_token = self.id_token(kid=self.login_kid, **self.login_claims)
