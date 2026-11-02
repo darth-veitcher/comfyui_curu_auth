@@ -86,7 +86,7 @@ class TestOidcLoginAgainstRealAuthelia:
             # 4. Follow the callback back to comfyui -- this is where the
             # gate mints the curu_auth session (ADR-002/FR-003).
             async with session.get(callback_url, allow_redirects=False) as response:
-                assert response.status in (302, 303, 307)
+                assert response.status == 200  # a page that moves on, not a redirect
                 set_cookie = response.headers.getall("Set-Cookie", [])
             curu_cookie = next(
                 (c for c in set_cookie if c.startswith("curu_auth=")), None

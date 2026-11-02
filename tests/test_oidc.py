@@ -886,13 +886,15 @@ class TestOidcCallbackHandler:
                 first = await node_client.get(
                     _CALLBACK_PATH, params=params, allow_redirects=False
                 )
-                assert first.status in (302, 303, 307)
+                assert first.status == 200
 
                 second = await node_client.get(
                     _CALLBACK_PATH, params=params, allow_redirects=False
                 )
 
-        assert second.status not in (302, 303, 307)
+        # Refused, not merely "not a redirect": a good callback answers 200 too.
+        assert second.status == 401
+        assert "curu_auth" not in second.cookies
 
     async def test_a_rejected_callback_is_logged_via_the_existing_format(
         self, caplog: pytest.LogCaptureFixture
@@ -1237,7 +1239,7 @@ class TestSharedRateLimiterDoesNotSelfBlockALegitimateLogin:
                     allow_redirects=False,
                 )
 
-        assert callback_response.status in (302, 303, 307), callback_response.status
+        assert callback_response.status == 200, callback_response.status
 
 
 # --------------------------------------------------------------------------

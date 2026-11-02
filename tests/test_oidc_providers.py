@@ -71,11 +71,15 @@ async def _login(
         assert started.status == 302, await started.text()
         query = parse_qs(urlsplit(started.headers["Location"]).query)
         issuer.nonce = query["nonce"][0]
-        return await client.get(
+        response = await client.get(
             CALLBACK,
             params={"code": "a-code", "state": query["state"][0]},
             allow_redirects=False,
         )
+        # Read the body while the client is open: a good callback answers a
+        # page, not a redirect (tests/test_oidc.py).
+        await response.read()
+        return response
 
 
 def _session_cookie(response: ClientResponse) -> str | None:
@@ -155,14 +159,14 @@ class TestTheIssuerIsUsedExactly:
         async with FakeIssuer() as issuer:
             response = await _login(issuer)
 
-        assert response.status == 302, await response.text()
+        assert response.status == 200, await response.text()
         assert _session_cookie(response)
 
     async def test_a_login_through_an_issuer_with_no_slash_works(self) -> None:
         async with FakeIssuer(trailing_slash=False) as issuer:
             response = await _login(issuer)
 
-        assert response.status == 302, await response.text()
+        assert response.status == 200, await response.text()
         assert _session_cookie(response)
 
     async def test_an_iss_without_the_slash_of_the_issuer_is_refused(self) -> None:
@@ -187,7 +191,7 @@ class TestTheKeySetsTheAlgorithm:
             issuer.login_kid = kid
             response = await _login(issuer)
 
-        assert response.status == 302, await response.text()
+        assert response.status == 200, await response.text()
         assert _session_cookie(response)
 
     @pytest.mark.parametrize("alg", ["RS384", "RS512", "PS256"])
@@ -198,7 +202,7 @@ class TestTheKeySetsTheAlgorithm:
             issuer.login_kid = "rsa-x"
             response = await _login(issuer)
 
-        assert response.status == 302, await response.text()
+        assert response.status == 200, await response.text()
         assert _session_cookie(response)
 
 
@@ -487,7 +491,7 @@ class TestTheAllowlist:
                 issuer, allowlist=_allowlist(subjects=frozenset({"user-1"}))
             )
 
-        assert response.status == 302
+        assert response.status == 200
         assert _session_cookie(response)
 
     async def test_a_subject_that_is_not_listed_gets_401_a_log_line_and_a_backoff(
@@ -533,7 +537,7 @@ class TestTheAllowlist:
             issuer.login_claims = {"sub": "x", "hd": "example.com"}
             response = await _login(issuer, allowlist=_allowlist(domain="example.com"))
 
-        assert response.status == 302
+        assert response.status == 200
         assert _session_cookie(response)
 
     async def test_with_no_allowlist_in_the_config_nobody_gets_a_session(
