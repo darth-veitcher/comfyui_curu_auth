@@ -27,7 +27,33 @@ function endsAtLogin(response) {
   }
 }
 
+// One move for each page load. The time of the last move is kept for this
+// tab only, and a second move within 5 seconds does not occur. A loop can
+// occur only if a page loads with a valid session and loses it at once.
+const LEFT_AT_KEY = "curu-auth:left-at";
+const MOVE_INTERVAL_MS = 5000;
+let leaving = false;
+
+function movedRecently(now) {
+  try {
+    const leftAt = Number(window.sessionStorage.getItem(LEFT_AT_KEY));
+    return Number.isFinite(leftAt) && now - leftAt < MOVE_INTERVAL_MS;
+  } catch {
+    return false;
+  }
+}
+
 function leave() {
+  const now = Date.now();
+  if (leaving || movedRecently(now)) {
+    return;
+  }
+  leaving = true;
+  try {
+    window.sessionStorage.setItem(LEFT_AT_KEY, String(now));
+  } catch {
+    // Storage can be off. The move still occurs.
+  }
   window.location.assign(LOGIN_PATH);
 }
 
