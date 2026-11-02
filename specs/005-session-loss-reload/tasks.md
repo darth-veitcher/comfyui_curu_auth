@@ -44,7 +44,7 @@ This phase blocks User Story 1, because the module acts on the mark. It also ser
 **Independent Test**: log in with Chromium, clear the `SessionStore`, and measure the time until the tab shows the login page. Count the log lines.
 
 - [x] T006-T [US1] Write failing tests for "The session store loses the session" and "The gate rejects a poll" in `tests/browser/test_session_loss.py` (rules T1, T2).
-- [ ] T006-I [US1] Create `web/session_loss.js` with the wrapper of `window.fetch` and the move with `location.assign("/curu-auth/login")`, and set `WEB_DIRECTORY = "./web"` in `__init__.py`.
+- [x] T006-I [US1] Create `web/session_loss.js` with the wrapper of `window.fetch` and the move with `location.assign("/curu-auth/login")`, and set `WEB_DIRECTORY = "./web"` in `__init__.py`.
 - [ ] T007-T [US1] Write failing tests in `tests/browser/test_session_loss.py` for "The gate rejects the ws handshake" (rule T5), and for one probe in 2 seconds (rule T9).
 - [ ] T007-I [US1] Add the wrapper of `window.WebSocket` and the probe with the original `fetch` to `web/session_loss.js`. Keep the prototype and the static constants of `WebSocket`.
 - [ ] T008-T [US1] Write failing tests for "No new log line after the move" in `tests/browser/test_session_loss.py`, with `caplog`. Also test the 5-second limit (rule T10) and one move only (rule T11).

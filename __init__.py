@@ -38,7 +38,7 @@ import logging
 import os
 from pathlib import Path
 
-WEB_DIRECTORY = None  # no JS of its own -- this is a server-side-only gate
+WEB_DIRECTORY = "./web"  # web/session_loss.js (spec 005, ADR-009)
 NODE_CLASS_MAPPINGS: dict[str, object] = {}
 NODE_DISPLAY_NAME_MAPPINGS: dict[str, str] = {}
 
