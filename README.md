@@ -15,6 +15,7 @@ comfyui_curu_auth is a ComfyUI custom node that puts a credential in front of yo
 | Keep the same credential | `COMFYUI_CURU_AUTH_TOKEN` | [Keep the same credential after a restart](#keep-the-same-credential-after-a-restart) |
 | Let a program send an access token | `COMFYUI_CURU_AUTH_OIDC_AUDIENCE` | [Let a program call ComfyUI with an access token](#let-a-program-call-comfyui-with-an-access-token) |
 | Log in with your identity provider | The four connection settings and an allowlist | [Log in through your identity provider](#log-in-through-your-identity-provider) |
+| Log in with your identity provider at more than one address | A list in `COMFYUI_CURU_AUTH_OIDC_REDIRECT_URI` | [Log in through your identity provider at more than one address](#log-in-through-your-identity-provider-at-more-than-one-address) |
 | Choose HTTPS or plain HTTP | `X-Forwarded-Proto: https` at your proxy | [Use HTTPS or plain HTTP](#use-https-or-plain-http) |
 | Understand a 429 | Wait for `Retry-After` | [Recover from repeated failures](#recover-from-repeated-failures) |
 | Block attackers at the firewall | `contrib/fail2ban`, `contrib/crowdsec` | [Block repeat offenders at the firewall](#block-repeat-offenders-at-the-firewall) |
@@ -101,7 +102,7 @@ A successful login gives the same `curu_auth` cookie as the credential form. The
 | `COMFYUI_CURU_AUTH_OIDC_ISSUER_URL` | The issuer, exactly as the discovery document gives it. | none |
 | `COMFYUI_CURU_AUTH_OIDC_CLIENT_ID` | The client id at the provider. | none |
 | `COMFYUI_CURU_AUTH_OIDC_CLIENT_SECRET` | The client secret at the provider. | none |
-| `COMFYUI_CURU_AUTH_OIDC_REDIRECT_URI` | The callback URL that the provider sends the browser to. | none |
+| `COMFYUI_CURU_AUTH_OIDC_REDIRECT_URI` | The callback URL that the provider sends the browser to. For more than one address, give a list with a comma between the URLs. | none |
 | `COMFYUI_CURU_AUTH_OIDC_ALLOWED_SUBJECTS` | The `sub` values that can log in, with a comma or a space between them. | empty |
 | `COMFYUI_CURU_AUTH_OIDC_ALLOWED_EMAILS` | The emails that can log in, with a comma or a space between them. An email matches only when `email_verified` is true. Capital letters do not matter. | empty |
 | `COMFYUI_CURU_AUTH_OIDC_ALLOWED_DOMAIN` | One Google Workspace domain, compared with the `hd` claim. | empty |
@@ -112,10 +113,11 @@ The text below omits the prefix `COMFYUI_CURU_AUTH_OIDC_` of each setting.
 
 The OIDC login stays off until you set the four connection settings. If one of them is missing, the gate starts with no OIDC login.
 
-The OIDC login also stays off, with a message in the console, in two cases:
+The OIDC login also stays off, with a message in the console, in three cases:
 
 - You set no allowlist. The message contains `OIDC login is off: set`. Set an allowlist, or `ALLOW_ANY_USER=true` when the identity provider already limits who can log in.
 - The issuer uses plain `http` on a host that is not loopback. Use `https`.
+- A redirect URI is not an `http` or `https` URL, or its path does not end in `/curu-auth/oidc/callback`. The message contains `each entry of`.
 
 Never set `ALLOW_ANY_USER=true` for Google, because each Google account can log in there.
 
@@ -128,6 +130,26 @@ The callback refuses a login when one of these is true:
 - The person is not on the allowlist.
 
 A refused callback gives HTTP 401 and counts as a failed attempt.
+
+## Log in through your identity provider at more than one address
+
+Do this when people open the same ComfyUI at more than one address. For example, they use a LAN address at home and a name behind a reverse proxy from outside. With one redirect URI, the provider always sends the browser back to that one address. A login from the other address then fails.
+
+1. Register one redirect URI for each address on the client at the identity provider.
+2. Give all of them in one setting, with a comma between them:
+
+   ```bash
+   export COMFYUI_CURU_AUTH_OIDC_REDIRECT_URI="http://192.168.1.117:8188/curu-auth/oidc/callback,https://comfyui.example.com/curu-auth/oidc/callback"
+   ```
+
+3. Restart ComfyUI.
+4. Log in from each address. Each login must come back to the address where it started.
+
+The gate compares the address of the browser with each URI in the list. It compares the scheme, the host and the port. The gate reads the address from `X-Forwarded-Proto`, `X-Forwarded-Host` or `Forwarded` when a proxy sends them, and else from `Host`. If no URI matches, the gate uses the first URI.
+
+Your proxy must send `X-Forwarded-Host`, or keep the `Host` header of the browser. Traefik and Caddy keep it. nginx needs `proxy_set_header Host $host;`.
+
+A client can change these headers. It can only select another URI from your list, never a URL of its own. The identity provider also refuses each URI that is not registered on the client.
 
 ## Let a program call ComfyUI with an access token
 
