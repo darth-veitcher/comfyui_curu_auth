@@ -98,10 +98,10 @@ This phase blocks User Story 1, because the module acts on the mark. It also ser
 
 ## Phase 7: Documentation and polish
 
-- [ ] T018 [P] Add what a user sees after a session loss to the section "Log in from a browser" of `README.md`. Add the header `X-Curu-Auth` to "Technical notes".
-- [ ] T019 [P] Add the `browser` tier command, the `--group live` flag for the `system` tier, and the `web/` folder to `AGENTS.md`.
-- [ ] T020 [P] Add the change under "Unreleased" in `CHANGELOG.md`.
-- [ ] T021 [P] Replace the comment "no JS of its own" next to `WEB_DIRECTORY` in `__init__.py`, and update the module docstring.
+- [x] T018 [P] Add what a user sees after a session loss to the section "Log in from a browser" of `README.md`. Add the header `X-Curu-Auth` to "Technical notes".
+- [x] T019 [P] Add the `browser` tier command, the `--group live` flag for the `system` tier, and the `web/` folder to `AGENTS.md`.
+- [x] T020 [P] Add the change under "Unreleased" in `CHANGELOG.md`.
+- [x] T021 [P] Replace the comment "no JS of its own" next to `WEB_DIRECTORY` in `__init__.py`, and update the module docstring.
 - [ ] T022 Run `beacon docs check` and the `beacon-docs-reviewer` agent on `README.md` and `AGENTS.md`, and fix each finding.
 - [ ] T023 Run the quality gates, `uv run pytest` 3 times, the `browser` tier 3 times, the `system` tier and `beacon doctor --strict`.
 - [ ] T024 Do steps 1 to 7 of section 4 of `specs/005-session-loss-reload/quickstart.md` by hand.

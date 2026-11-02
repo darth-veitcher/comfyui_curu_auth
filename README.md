@@ -54,7 +54,11 @@ A correct credential gives the normal answer of ComfyUI. A missing or wrong cred
 
 Open `/curu-auth/login`, or any page of ComfyUI, and paste the credential. The gate then sets a session cookie, `curu_auth`, for 30 days. The cookie is `HttpOnly` and `SameSite=Strict`. It holds a separate session token, so the browser never sends the credential again.
 
-The gate keeps the sessions in memory. A restart of ComfyUI ends each session, and the browser shows the login page again.
+The gate keeps the sessions in memory, so a restart of ComfyUI ends each session. An open ComfyUI tab then goes to the login page by itself. This occurs within 5 seconds after ComfyUI is ready again. Log in, and the tab shows ComfyUI again. ComfyUI keeps your open workflow in the browser, so you do not lose it.
+
+While ComfyUI is down, the tab stays on its page. An HTTP 401 from ComfyUI or from another node does not move the tab.
+
+If you log in less than 1 second after the move, the login page can ask you to wait 1 second. The old cookie of the tab counted as one wrong credential.
 
 ## Keep the same credential after a restart
 
@@ -221,7 +225,9 @@ The text after `from` is the address of the client. The text in parentheses is t
 
 ## Technical notes
 
-The node adds one `aiohttp` middleware to `server.PromptServer.instance.app` when ComfyUI imports it. ComfyUI registers each route on that app, so the middleware covers each route, also the `/ws` handshake. The node has no node classes, and it serves no JavaScript except the countdown on the login page.
+The node adds one `aiohttp` middleware to `server.PromptServer.instance.app` when ComfyUI imports it. ComfyUI registers each route on that app, so the middleware covers each route, also the `/ws` handshake. The node has no node classes.
+
+The node gives ComfyUI one script for its page, `web/session_loss.js`, through `WEB_DIRECTORY`. The gate covers that file like each other route. The script watches the answers of `fetch` and the `/ws` handshakes of the page. The gate adds the header `X-Curu-Auth: login-required` to each HTTP 401 and HTTP 429 that it gives. When an answer has that header, the script sends the tab to the login page. A browser does not show the status of a failed `/ws` handshake, so the script then asks for its own file one time. It does this no more than once in 2 seconds. The header does not change the status or the body, so a program can ignore it. If the script does not load, the gate works as before.
 
 The credential comes from `secrets.token_urlsafe(32)`. The gate compares it with `secrets.compare_digest`, in constant time.
 
@@ -238,6 +244,7 @@ Decisions:
 - [ADR-006](project-management/ADRs/ADR-006-session-cookie-secure-follows-the-browsers-scheme.md): `Secure` follows the scheme of the browser.
 - [ADR-007](project-management/ADRs/ADR-007-oidc-issuer-algorithms-and-allowlist.md): the issuer, the algorithms and the allowlist of the OIDC login.
 - [ADR-008](project-management/ADRs/ADR-008-oidc-access-tokens-on-the-bearer-path.md): access tokens on the Bearer path, and how they count in the wait.
+- [ADR-009](project-management/ADRs/ADR-009-a-module-in-the-comfyui-page-acts-on-a-gate-rejection.md): a script in the ComfyUI page sends the tab to the login page.
 
 The credential scheme comes from [curu](https://github.com/darth-veitcher/curu). The licence is MIT, see [LICENSE](LICENSE).
 
@@ -250,15 +257,16 @@ uv run pytest
 
 The default tests need no ComfyUI and no network. They run the gate against a small `aiohttp` application, and the OIDC login against a fake provider with RSA, EC and Ed25519 keys.
 
-Three test tiers do not run by default:
+Four test tiers do not run by default:
 
 | Tier | Command | What it needs and checks |
 |---|---|---|
-| `system` | `uv run pytest -m system` | Docker. It starts a CPU-only ComfyUI with this node, and Authelia as the OIDC provider. It checks the routes, the `/ws` handshake, the wait and the OIDC login. |
+| `system` | `uv run --group live pytest -m system` | Docker and Chromium. It starts a CPU-only ComfyUI with this node, and Authelia as the OIDC provider. It checks the routes, the `/ws` handshake, the wait and the OIDC login. It also restarts ComfyUI and checks that an open tab goes to the login page. |
+| `browser` | `uv run --group live pytest -m browser` | Chromium. It runs `web/session_loss.js` against the real gate and a small copy of the ComfyUI page. It checks when the tab goes to the login page, and when it stays. |
 | `rauthy` | `uv run --group live pytest -m rauthy` | Docker and Chromium. It starts rauthy 0.37.2, logs in through it in a browser with an EdDSA ID token, and calls `GET /queue` with a `client_credentials` token. |
 | `comfy_mcp` | `uv run --group live pytest -m comfy_mcp` | Docker and git access to the private comfy-mcp repository. It starts rauthy 0.37.2 and comfy-mcp 0.1.0 with an `oidc` backend table. comfy-mcp then reads the queue through the gate with its own token. |
 
-To install Chromium for the `rauthy` tier, run `uv run --group live playwright install chromium`.
+To install Chromium for the `system`, `browser` and `rauthy` tiers, run `uv run --group live playwright install chromium`.
 
 The quality gates are `uv run ruff check`, `uv run ruff format`, `uv run ty check` and `beacon doctor --strict`. `AGENTS.md` gives the rules for a change.
 

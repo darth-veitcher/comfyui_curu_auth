@@ -9,6 +9,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- An open ComfyUI tab now goes to the login page by itself when its session
+  is lost, for example after a restart of ComfyUI. Before, the tab polled
+  `/api/jobs` and opened `/ws` again and again, and each request wrote one
+  `authentication failure` line. The node now gives ComfyUI one script,
+  `web/session_loss.js`. The gate marks each of its HTTP 401 and HTTP 429
+  answers with `X-Curu-Auth: login-required`; the status, the body and the log
+  line do not change. A tab stays on its page while ComfyUI is down, and on an
+  HTTP 401 of ComfyUI or another node.
+
 - A login through an identity provider on another site, for example Authentik on
   its own domain, no longer returns the person to the login page. The callback
   answered with a redirect to `/`, and a browser does not send a
@@ -34,6 +43,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   A valid token passes also during a wait, so the immediate retry of comfy-mcp
   after a 401 is not a 429.
 - The `rauthy` test tier gets a `client_credentials` token and calls `GET /queue`.
+- A `browser` test tier runs `web/session_loss.js` in Chromium against the real
+  gate. The `system` tier now needs the `live` group.
 
 <!-- version list -->
 
