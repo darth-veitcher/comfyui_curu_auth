@@ -34,6 +34,15 @@ _logger = logging.getLogger("comfyui_curu_auth")
 #: page itself).
 LOGIN_PATH = "/curu-auth/login"
 
+#: The header that marks each HTTP 401 and HTTP 429 of the middleware, so
+#: ``web/session_loss.js`` in an open ComfyUI tab can tell a rejection of
+#: this gate apart from an HTTP 401 of ComfyUI or of another node, and send
+#: the tab to :data:`LOGIN_PATH` (spec 005, ADR-009). A fixed value: it holds
+#: no credential and no token. The status and the body do not change, so a
+#: program can ignore it.
+REJECTION_HEADER = "X-Curu-Auth"
+REJECTION_VALUE = "login-required"
+
 #: The cookie a successful browser login sets, carrying a distinct
 #: session token (:class:`SessionStore`) -- never the master credential
 #: itself (the gate must never transmit that credential over the network
@@ -445,7 +454,10 @@ def build_gate_middleware(
                 blocked = web.json_response(
                     {"detail": "too many attempts", "retry_after": seconds},
                     status=429,
-                    headers={"Retry-After": str(seconds)},
+                    headers={
+                        "Retry-After": str(seconds),
+                        REJECTION_HEADER: REJECTION_VALUE,
+                    },
                 )
                 # The branch that actually stops a stale-cookie storm.
                 # Once the first rejection has started a block, every
@@ -487,7 +499,9 @@ def build_gate_middleware(
             raise redirect
 
         rejected = web.json_response(
-            {"detail": "missing or invalid credential"}, status=401
+            {"detail": "missing or invalid credential"},
+            status=401,
+            headers={REJECTION_HEADER: REJECTION_VALUE},
         )
         if supplied_cookie:
             _expire_session_cookie(rejected, request)
@@ -954,6 +968,8 @@ __all__ = [
     "COOKIE_MAX_AGE_SECONDS",
     "COOKIE_NAME",
     "LOGIN_PATH",
+    "REJECTION_HEADER",
+    "REJECTION_VALUE",
     "RateLimiter",
     "SessionStore",
     "browser_used_https",
