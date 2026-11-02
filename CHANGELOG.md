@@ -7,6 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- A login through an identity provider on another site, for example Authentik on
+  its own domain, no longer returns the person to the login page. The callback
+  answered with a redirect to `/`, and a browser does not send a
+  `SameSite=Strict` cookie after a redirect chain that starts on another site.
+  The callback now answers a short page that opens ComfyUI. The cookie stays
+  `SameSite=Strict`.
+
 ### Added
 
 - Resource-server mode: the Bearer path also accepts a short-lived OIDC access

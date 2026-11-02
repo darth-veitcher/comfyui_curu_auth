@@ -86,6 +86,17 @@ except ImportError:
 OIDC_START_PATH = "/curu-auth/oidc/start"
 OIDC_CALLBACK_PATH = "/curu-auth/oidc/callback"
 
+#: What a good callback answers: a page that moves the browser on to ComfyUI
+#: from this site (see the callback's own comment). The link is for a browser
+#: that does not follow a meta refresh.
+_SIGNED_IN_PAGE = (
+    "<!DOCTYPE html>\n"
+    '<html><head><meta charset="utf-8">'
+    '<meta http-equiv="refresh" content="0;url=/">'
+    "<title>Signed in</title></head>"
+    '<body><p>Signed in. <a href="/">Open ComfyUI</a>.</p></body></html>\n'
+)
+
 
 class OIDCDiscoveryError(Exception):
     """Raised for any failure fetching or parsing the identity provider's
@@ -1112,13 +1123,26 @@ def build_oidc_routes(
             rate_limiter.record_success(key)
 
         session_token = sessions.issue()
-        redirect = web.HTTPFound("/")
+        # A page that moves the browser on to `/`, not a redirect. The
+        # browser reached this callback from the provider, another site, so
+        # it counts a redirect from here as part of a cross-site chain and
+        # sends no `SameSite=Strict` cookie with the `GET /` that follows:
+        # the gate refuses the session it just issued, and the person lands
+        # on the login page again (found live, Authentik on its own domain
+        # and ComfyUI on a LAN address). A navigation that this page starts
+        # is same-site, so the cookie stays `Strict`. A meta refresh, not a
+        # script, so no Content-Security-Policy can stop it.
+        response = web.Response(
+            text=_SIGNED_IN_PAGE,
+            content_type="text/html",
+            headers={"Cache-Control": "no-store", "Referrer-Policy": "no-referrer"},
+        )
         # The same cookie, with the same scheme-dependent `Secure`, the
         # credential form sets (ADR-002, ADR-006).
         set_session_cookie(
-            redirect, request, session_token, max_age=COOKIE_MAX_AGE_SECONDS
+            response, request, session_token, max_age=COOKIE_MAX_AGE_SECONDS
         )
-        raise redirect
+        return response
 
     return start, callback
 
