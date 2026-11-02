@@ -104,6 +104,8 @@ class Gate:
     #: When true, ``/ws`` refuses each handshake with its own HTTP 403, as
     #: a proxy or a broken ComfyUI can. This is not a gate rejection.
     refuse_ws: bool = False
+    #: An ``oidc.OIDCConfig``. When set, the OIDC routes are on.
+    oidc_config: Any = None
     runner: web.AppRunner | None = None
     site: web.TCPSite | None = None
 
@@ -112,6 +114,11 @@ class Gate:
         return f"http://127.0.0.1:{self.port}"
 
     def build_app(self) -> web.Application:
+        from oidc import OIDC_CALLBACK_PATH, OIDC_START_PATH
+
+        public_paths = {LOGIN_PATH}
+        if self.oidc_config is not None:
+            public_paths |= {OIDC_START_PATH, OIDC_CALLBACK_PATH}
         app = web.Application(
             middlewares=[
                 self._count,
@@ -119,7 +126,7 @@ class Gate:
                     CREDENTIAL,
                     sessions=self.sessions,
                     rate_limiter=self.rate_limiter,
-                    public_paths={LOGIN_PATH},
+                    public_paths=public_paths,
                 ),
             ]
         )
@@ -128,6 +135,17 @@ class Gate:
         )
         app.router.add_get(LOGIN_PATH, login_get)
         app.router.add_post(LOGIN_PATH, login_post)
+        if self.oidc_config is not None:
+            from oidc import AuthorizationRequestStore, build_oidc_routes
+
+            start, callback = build_oidc_routes(
+                self.oidc_config,
+                sessions=self.sessions,
+                store=AuthorizationRequestStore(),
+                rate_limiter=self.rate_limiter,
+            )
+            app.router.add_get(OIDC_START_PATH, start)
+            app.router.add_get(OIDC_CALLBACK_PATH, callback)
         app.router.add_get("/", self._page)
         app.router.add_get(MODULE_PATH, self._module)
         app.router.add_get("/api/jobs", self._jobs)

@@ -172,3 +172,51 @@ async def test_the_user_logs_in_again(gate: Gate, browser) -> None:
     assert await page.text_content("#app") == "ComfyUI"
     await asyncio.sleep(2)
     assert page.url == f"{gate.url}/"
+
+
+async def test_an_oidc_session_is_lost(browser) -> None:
+    """Scenario: An OIDC session is lost. The OIDC login gives a session of
+    the same store, so its loss moves the tab in the same way."""
+    from urllib.parse import parse_qs, urlsplit
+
+    from oidc import OIDC_CALLBACK_PATH, OIDC_START_PATH, LoginAllowlist, OIDCConfig
+    from tests.browser.conftest import free_port
+    from tests.support.fake_issuer import CLIENT_ID, CLIENT_SECRET, FakeIssuer
+
+    async with FakeIssuer() as issuer:
+        port = free_port()
+        gate = Gate(
+            port=port,
+            oidc_config=OIDCConfig(
+                issuer_url=issuer.issuer,
+                client_id=CLIENT_ID,
+                client_secret=CLIENT_SECRET,
+                redirect_uri=f"http://127.0.0.1:{port}{OIDC_CALLBACK_PATH}",
+                allowlist=LoginAllowlist(allow_any=True),
+            ),
+        )
+        await gate.start()
+        try:
+            context = await browser.new_context()
+            started = await context.request.get(
+                f"{gate.url}{OIDC_START_PATH}", max_redirects=0
+            )
+            query = parse_qs(urlsplit(started.headers["location"]).query)
+            issuer.nonce = query["nonce"][0]
+            callback = await context.request.get(
+                f"{gate.url}{OIDC_CALLBACK_PATH}",
+                params={"code": "a-code", "state": query["state"][0]},
+                max_redirects=0,
+            )
+            assert callback.status == 200, await callback.text()
+
+            page = await context.new_page()
+            await page.goto(f"{gate.url}/?ws=0")
+            await page.wait_for_function("window.moduleLoaded !== undefined")
+            assert page.url == f"{gate.url}/?ws=0", "the OIDC login gave no session"
+
+            gate.lose_sessions()
+
+            assert await wait_for_path(page, LOGIN_PATH, LIMIT_SECONDS)
+        finally:
+            await gate.cleanup()
