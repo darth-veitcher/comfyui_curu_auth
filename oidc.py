@@ -236,13 +236,21 @@ def _origin_key(url: str) -> tuple[str, str, int] | None:
 def _redirect_uris(setting: str) -> tuple[str, ...]:
     """The entries of the redirect URI setting, in order, each one time.
 
-    Raises :class:`OIDCConfigError` for an entry that is not an ``http`` or
+    Raises :class:`OIDCConfigError` for a setting with no entry, and for an
+    entry that is not an ``http`` or
     ``https`` URL with a host, or whose path does not end in
     :data:`OIDC_CALLBACK_PATH`: the provider would send the browser to a
     route that is not the callback.
     """
 
     uris = tuple(dict.fromkeys(_split(setting)))
+    if not uris:
+        # A setting of separators only ("," or " ") passes the caller's
+        # truthiness check. Any exception but this one would escape
+        # __init__.py and leave the gate uninstalled -- open (issue #28).
+        raise OIDCConfigError(
+            "OIDC login is off: COMFYUI_CURU_AUTH_OIDC_REDIRECT_URI holds no URL"
+        )
     for uri in uris:
         if _origin_key(uri) is None or not urlsplit(uri).path.endswith(
             OIDC_CALLBACK_PATH

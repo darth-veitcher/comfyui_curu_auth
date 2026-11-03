@@ -85,6 +85,15 @@ class TestTheSettingTakesAList:
         with pytest.raises(OIDCConfigError, match="REDIRECT_URI"):
             _resolve(value)
 
+    @pytest.mark.parametrize("value", [",", " , ", ",,", " "])
+    def test_a_setting_with_no_entry_is_a_setup_error(self, value: str) -> None:
+        # Issue #28: any other exception escapes __init__.py, ComfyUI skips the
+        # node, and the gate is never installed -- open.
+        from oidc import OIDCConfigError
+
+        with pytest.raises(OIDCConfigError, match="REDIRECT_URI"):
+            _resolve(value)
+
     def test_a_path_prefix_of_a_proxy_is_accepted(self) -> None:
         uri = f"https://example.com/comfy{CALLBACK}"
 

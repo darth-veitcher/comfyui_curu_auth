@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- A `COMFYUI_CURU_AUTH_OIDC_REDIRECT_URI` that holds only separators, for
+  example `,` or a space, no longer turns the gate off. Before, the setting
+  raised an error that ComfyUI caught, so ComfyUI skipped the node and served
+  every request with no authentication. Now the OIDC login stays off with a
+  message, and the gate stays on (#28).
+
 <!-- version list -->
 
 ## v2.3.0 (2026-11-02)
