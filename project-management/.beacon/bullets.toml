@@ -6,13 +6,8 @@
 # works in CI) and no per-branch file is left behind on the trunk after a merge.
 # `git log -p` on this file is the audit trail of who started which bullet when.
 
-[bullets."feature/oidc-multiple-redirect-uris"]
-title = "OIDC login at more than one redirect URI (#25)"
+[bullets."chore/post-release-cleanup"]
+title = "Post-release clean-up after v2.3.0"
 owner = "unknown"
-started = "2026-11-02T21:53:12+00:00"
-epic = "oidc-auth"
-
-[bullets."fix/oidc-callback-same-site-hop"]
-title = "OIDC callback keeps the Strict cookie across the provider's redirect"
-owner = "unknown"
-started = "2026-11-02T08:43:43+00:00"
+started = "2026-11-03T06:56:30+00:00"
+quick_fix = "true"

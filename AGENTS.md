@@ -54,7 +54,7 @@ The articles are in [the constitution](.specify/memory/constitution.md).
 
 ## Current work
 
-Active spec: [specs/005-session-loss-reload/spec.md](specs/005-session-loss-reload/spec.md) and its [plan.md](specs/005-session-loss-reload/plan.md). `beacon bullet status` names the bullet of the current branch.
+No spec is active. The last spec is [specs/005-session-loss-reload/spec.md](specs/005-session-loss-reload/spec.md), shipped in v2.3.0. `beacon bullet status` names the bullet of the current branch.
 
 ## Known problems
 

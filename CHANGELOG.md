@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+<!-- version list -->
+
+## v2.3.0 (2026-11-02)
+
 ### Fixed
 
 - An open ComfyUI tab now goes to the login page by itself when its session
@@ -18,50 +22,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   line do not change. A tab stays on its page while ComfyUI is down, and on an
   HTTP 401 of ComfyUI or another node.
 
-- A login through an identity provider on another site, for example Authentik on
-  its own domain, no longer returns the person to the login page. The callback
-  answered with a redirect to `/`, and a browser does not send a
-  `SameSite=Strict` cookie after a redirect chain that starts on another site.
-  The callback now answers a short page that opens ComfyUI. The cookie stays
-  `SameSite=Strict`.
-
 ### Added
 
-- The OIDC login works at more than one address of the same ComfyUI, for
-  example a LAN address and a name behind a reverse proxy.
-  `COMFYUI_CURU_AUTH_OIDC_REDIRECT_URI` accepts a list with a comma between the
-  URLs. Each login uses the URL whose origin is the origin of the request, and
-  the first URL when none matches. The token exchange sends the same URL again.
-  One URL works as before.
-- Resource-server mode: the Bearer path also accepts a short-lived OIDC access
-  token of the configured issuer. Set `COMFYUI_CURU_AUTH_OIDC_AUDIENCE` (with the
-  issuer) to turn it on, and `COMFYUI_CURU_AUTH_OIDC_REQUIRED_SCOPES` to require
-  scopes. Off by default; the static credential does not change.
-- A token must be signed by a key of the issuer (RS256, RS384, RS512, PS256,
-  ES256 or EdDSA), hold the audience, live 1 hour or less, and not be expired
-  (no leeway). A `JWT` token or a token with no `typ` also needs a client id and
-  a scope, so an ID token is refused. The `/ws` handshake gets the same check.
-- The keys of the issuer stay in memory. An unknown `kid` causes one new read, at
-  most once in 60 seconds. A token with a bad shape, another issuer or a refused
-  `alg` causes no read.
-- A refused token counts as one failed attempt and logs
-  `authentication failure from <IP> (<METHOD> <PATH>: token refused: <reason>)`.
-  A valid token passes also during a wait, so the immediate retry of comfy-mcp
-  after a 401 is not a 429.
-- The `rauthy` test tier gets a `client_credentials` token and calls `GET /queue`.
 - A `browser` test tier runs `web/session_loss.js` in Chromium against the real
   gate. The `system` tier now needs the `live` group.
-
-### Changed
-
-- The OIDC login stays off, with a message, when a redirect URI is not an
-  `http` or `https` URL that ends in `/curu-auth/oidc/callback`. Before, such
-  a login started, and then failed when the identity provider sent the
-  browser back.
-
-<!-- version list -->
-
-## v2.3.0 (2026-11-02)
 
 ### Chores
 
@@ -178,6 +142,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## v2.2.0 (2026-11-02)
 
+### Added
+
+- The OIDC login works at more than one address of the same ComfyUI, for
+  example a LAN address and a name behind a reverse proxy.
+  `COMFYUI_CURU_AUTH_OIDC_REDIRECT_URI` accepts a list with a comma or a space
+  between the URIs. Each login uses the URI whose origin is the origin of the
+  request, and the first URI when none matches. The token exchange sends the
+  same URI again. One URI works as before.
+
+### Changed
+
+- The OIDC login stays off, with a message, when a redirect URI is not an
+  `http` or `https` URL that ends in `/curu-auth/oidc/callback`. Before, such
+  a login started, and then failed when the identity provider sent the
+  browser back.
+
 ### Documentation
 
 - **oidc**: Log in through the identity provider at more than one address
@@ -206,6 +186,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 
 ## v2.1.1 (2026-11-02)
+
+### Fixed
+
+- A login through an identity provider on another site, for example Authentik on
+  its own domain, no longer returns the person to the login page. The callback
+  answered with a redirect to `/`, and a browser does not send a
+  `SameSite=Strict` cookie after a redirect chain that starts on another site.
+  The callback now answers a short page that opens ComfyUI. The cookie stays
+  `SameSite=Strict`.
 
 ### Bug Fixes
 
@@ -267,6 +256,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 
 ## v2.1.0 (2026-11-01)
+
+### Added
+
+- Resource-server mode: the Bearer path also accepts a short-lived OIDC access
+  token of the configured issuer. Set `COMFYUI_CURU_AUTH_OIDC_AUDIENCE` (with the
+  issuer) to turn it on, and `COMFYUI_CURU_AUTH_OIDC_REQUIRED_SCOPES` to require
+  scopes. Off by default; the static credential does not change.
+- A token must be signed by a key of the issuer (RS256, RS384, RS512, PS256,
+  ES256 or EdDSA), hold the audience, live 1 hour or less, and not be expired
+  (no leeway). A `JWT` token or a token with no `typ` also needs a client id and
+  a scope, so an ID token is refused. The `/ws` handshake gets the same check.
+- The keys of the issuer stay in memory. An unknown `kid` causes one new read, at
+  most once in 60 seconds. A token with a bad shape, another issuer or a refused
+  `alg` causes no read.
+- A refused token counts as one failed attempt and logs
+  `authentication failure from <IP> (<METHOD> <PATH>: token refused: <reason>)`.
+  A valid token passes also during a wait, so the immediate retry of comfy-mcp
+  after a 401 is not a 429.
+- The `rauthy` test tier gets a `client_credentials` token and calls `GET /queue`.
 
 ### Features
 
