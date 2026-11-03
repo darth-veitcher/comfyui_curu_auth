@@ -17,6 +17,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 <!-- version list -->
 
+## v2.3.1 (2026-11-03)
+
+### Bug Fixes
+
+- **oidc**: A redirect URI setting with no entries keeps the gate on
+  ([`585eaf2`](https://github.com/darth-veitcher/comfyui_curu_auth/commit/585eaf2ab2b1e32d624cdbcb9feced99844d29d4))
+
+### Chores
+
+- Clean up after the v2.3.0 release
+  ([#27](https://github.com/darth-veitcher/comfyui_curu_auth/pull/27),
+  [`bd31097`](https://github.com/darth-veitcher/comfyui_curu_auth/commit/bd31097549934c7389389b3abda0e126a5d62c25))
+
+
 ## v2.3.0 (2026-11-02)
 
 ### Fixed
