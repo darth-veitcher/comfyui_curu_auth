@@ -6,8 +6,7 @@
 # works in CI) and no per-branch file is left behind on the trunk after a merge.
 # `git log -p` on this file is the audit trail of who started which bullet when.
 
-[bullets."chore/post-release-cleanup"]
-title = "Post-release clean-up after v2.3.0"
+[bullets."fix/cookie-per-port"]
+title = "The session cookie name holds the listening port (#30)"
 owner = "unknown"
-started = "2026-11-03T06:56:30+00:00"
-quick_fix = "true"
+started = "2026-11-11T12:14:14+00:00"
