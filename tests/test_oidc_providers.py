@@ -83,8 +83,10 @@ async def _login(
 
 
 def _session_cookie(response: ClientResponse) -> str | None:
+    # The gate listens on the port of the request URL, and that port names
+    # its session cookie (issue #30).
     for value in response.headers.getall("Set-Cookie", []):
-        if value.startswith("curu_auth="):
+        if value.startswith(f"curu_auth_{response.url.port}="):
             return value.split(";", 1)[0].split("=", 1)[1]
     return None
 
