@@ -9,15 +9,32 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Two ComfyUI instances on one host now keep their own browser logins. The
+  session cookie is now `curu_auth_<port>`, for example `curu_auth_8188`. The
+  port is the port that ComfyUI listens on. Before, each instance set the same
+  cookie, `curu_auth`, and a browser sends the cookies of a host to each port.
+  So a login to one instance logged out the other instances. The credential
+  form, the OIDC login and the expiry of an unknown cookie all use the new name.
+  Each gate reads and expires only its own cookie (#30).
+
+### Changed
+
+- The gate does not read a cookie with the old name `curu_auth`. After the
+  upgrade, each browser logs in again one time. A program that reads the
+  session cookie by its name must read `curu_auth_<port>`. In `gate.py`,
+  `COOKIE_NAME_PREFIX` and `session_cookie_name(request)` replace `COOKIE_NAME`.
+
+<!-- version list -->
+
+## v2.3.1 (2026-11-03)
+
+### Fixed
+
 - A `COMFYUI_CURU_AUTH_OIDC_REDIRECT_URI` that holds only separators, for
   example `,` or a space, no longer turns the gate off. Before, the setting
   raised an error that ComfyUI caught, so ComfyUI skipped the node and served
   every request with no authentication. Now the OIDC login stays off with a
   message, and the gate stays on (#28).
-
-<!-- version list -->
-
-## v2.3.1 (2026-11-03)
 
 ### Bug Fixes
 
