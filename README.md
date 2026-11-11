@@ -53,7 +53,9 @@ A correct credential gives the normal answer of ComfyUI. A missing or wrong cred
 
 ## Log in from a browser
 
-Open `/curu-auth/login`, or any page of ComfyUI, and paste the credential. The gate then sets a session cookie, `curu_auth`, for 30 days. The cookie is `HttpOnly` and `SameSite=Strict`. It holds a separate session token, so the browser never sends the credential again.
+Open `/curu-auth/login`, or any page of ComfyUI, and paste the credential. The gate then sets a session cookie for 30 days. Its name is `curu_auth_<port>`, for example `curu_auth_8188`. The cookie is `HttpOnly` and `SameSite=Strict`. It holds a separate session token, so the browser never sends the credential again.
+
+The port in the name is the port that ComfyUI listens on. A browser sends the cookies of a host to each port of that host. So with this name, each ComfyUI instance on one host keeps its own login. For example, you can stay logged in to `http://192.168.1.117:8188` and `http://192.168.1.117:8189` at the same time. The gate reads only its own cookie, and it never expires the cookie of another instance. The port does not come from the `Host` header, because the client writes that header. Behind a reverse proxy, the name holds the port of ComfyUI, not the port of the proxy. If the gate cannot read the port, for example on a Unix socket, the name is `curu_auth_0`.
 
 The gate keeps the sessions in memory, so a restart of ComfyUI ends each session. An open ComfyUI tab then goes to the login page by itself. This occurs within 5 seconds after ComfyUI is ready again. Log in, and the tab shows ComfyUI again. ComfyUI keeps your open workflow in the browser storage, so you do not lose it. The ComfyUI setting "Persist workflow state and restore on page (re)load" does this. It is on by default.
 
@@ -99,7 +101,7 @@ An identity provider is a service that logs people in, for example rauthy, Authe
 
 6. Restart ComfyUI. The login page now has "Log in with your identity provider".
 
-A successful login gives the same `curu_auth` cookie as the credential form. The gate then shows a short page, "Signed in", which opens ComfyUI. After a login on another site, the browser does not send a `SameSite=Strict` cookie with a redirect from the callback. It sends the cookie when a page on the ComfyUI site starts the next request. [Connect an identity provider](docs/oidc-providers.md) gives the steps for rauthy, Authentik, Keycloak, Auth0, Okta, Microsoft Entra ID, Google and Authelia.
+A successful login gives the same session cookie as the credential form. The gate then shows a short page, "Signed in", which opens ComfyUI. After a login on another site, the browser does not send a `SameSite=Strict` cookie with a redirect from the callback. It sends the cookie when a page on the ComfyUI site starts the next request. [Connect an identity provider](docs/oidc-providers.md) gives the steps for rauthy, Authentik, Keycloak, Auth0, Okta, Microsoft Entra ID, Google and Authelia.
 
 | Setting | Meaning | Default |
 |---|---|---|
@@ -271,6 +273,7 @@ Decisions:
 - [ADR-007](project-management/ADRs/ADR-007-oidc-issuer-algorithms-and-allowlist.md): the issuer, the algorithms and the allowlist of the OIDC login.
 - [ADR-008](project-management/ADRs/ADR-008-oidc-access-tokens-on-the-bearer-path.md): access tokens on the Bearer path, and how they count in the wait.
 - [ADR-009](project-management/ADRs/ADR-009-a-module-in-the-comfyui-page-acts-on-a-gate-rejection.md): a script in the ComfyUI page sends the tab to the login page.
+- [ADR-010](project-management/ADRs/ADR-010-the-session-cookie-name-holds-the-listening-port.md): the name of the session cookie holds the port of ComfyUI.
 
 The credential scheme comes from [curu](https://github.com/darth-veitcher/curu). The licence is MIT, see [LICENSE](LICENSE).
 
@@ -333,7 +336,7 @@ The quality gates are `uv run ruff check`, `uv run ruff format`, `uv run ty chec
 | Redirect URI | The URL of the gate that the identity provider sends the browser back to. |
 | Reverse proxy | A server in front of ComfyUI that gets each request from the browser and sends it on to ComfyUI, for example Traefik, Caddy or nginx. |
 | Scope | A name for the data or the access that a login or a program asks for, for example `email`. A token holds its scopes in `scope` or `scp`. |
-| Session cookie | The `curu_auth` cookie that keeps a browser logged in for 30 days. |
+| Session cookie | The `curu_auth_<port>` cookie that keeps a browser logged in to one ComfyUI instance for 30 days. |
 | `scp` | Another name of the scope claim, for some identity providers. It can be a list. |
 | `sub` | The subject claim: a fixed id of the person at the identity provider. |
 | Wait | The time a caller must wait after a failure before it can try again (backoff). |
