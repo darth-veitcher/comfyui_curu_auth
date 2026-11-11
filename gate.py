@@ -55,7 +55,11 @@ REJECTION_VALUE = "login-required"
 #: over HTTPS is never sent back over plain HTTP, while a host reached
 #: over plain HTTP on purpose still gets a cookie the browser will store.
 #: ADR-006.
-COOKIE_NAME = "curu_auth"
+#:
+#: The name is this prefix, ``_`` and the port that this gate listens on,
+#: for example ``curu_auth_8188`` -- see :func:`session_cookie_name`.
+#: ADR-010, issue #30.
+COOKIE_NAME_PREFIX = "curu_auth"
 
 #: Public (not `_`-prefixed) because oidc.py's callback handler mints a
 #: session cookie through this exact same mechanism (ADR-002) and needs
@@ -196,13 +200,47 @@ def request_origin(request: web.Request) -> str:
     return f"{scheme}://{host}"
 
 
+def session_cookie_name(request: web.Request) -> str:
+    """The name of this gate's session cookie: :data:`COOKIE_NAME_PREFIX`,
+    ``_`` and the port that this server listens on, for example
+    ``curu_auth_8188``. ADR-010, issue #30.
+
+    A browser keys cookies by host, not by port (RFC 6265, section 8.5).
+    With one fixed name, two ComfyUI instances on one host (8188 and 8189)
+    shared one cookie, and each gate keeps its sessions in memory, so a
+    login to one wrote over the cookie of the other. Jupyter Server puts
+    its host and port in its cookie name for the same reason.
+
+    The port comes from the local address of the accepted connection
+    (``sockname``), never from ``Host`` or ``X-Forwarded-Host``: the client
+    writes those, and behind a reverse proxy they hold 443 for every
+    instance. The listening port is the same on each request to one
+    gate, so the issue, the check and the expiry always agree.
+
+    When the connection has no port to read -- a Unix socket, or a
+    connection that has closed -- the port part is ``0``, the socket
+    convention for "no port": ``curu_auth_0``.
+    """
+
+    transport = request.transport
+    sockname = transport.get_extra_info("sockname") if transport is not None else None
+    port = 0
+    if (
+        isinstance(sockname, tuple)
+        and len(sockname) >= 2
+        and isinstance(sockname[1], int)
+    ):
+        port = sockname[1]
+    return f"{COOKIE_NAME_PREFIX}_{port}"
+
+
 def set_session_cookie(
     response: web.StreamResponse, request: web.Request, value: str, *, max_age: int
 ) -> None:
-    """Set :data:`COOKIE_NAME` on ``response`` -- the one place this
-    package writes that cookie, whether issuing a session
-    (:func:`build_login_routes`, ``oidc.py``'s callback) or expiring one
-    (``value=""``, ``max_age=0``).
+    """Set this gate's session cookie (:func:`session_cookie_name`) on
+    ``response`` -- the one place this package writes that cookie, whether
+    issuing a session (:func:`build_login_routes`, ``oidc.py``'s callback)
+    or expiring one (``value=""``, ``max_age=0``).
 
     Public (not ``_``-prefixed) for the same reason as :func:`client_key`:
     ``oidc.py`` is a second real consumer, and the issue and the expiry
@@ -223,7 +261,7 @@ def set_session_cookie(
     """
 
     response.set_cookie(
-        COOKIE_NAME,
+        session_cookie_name(request),
         value,
         max_age=max_age,
         httponly=True,
@@ -233,7 +271,7 @@ def set_session_cookie(
 
 
 def _expire_session_cookie(response: web.StreamResponse, request: web.Request) -> None:
-    """Tell the client to drop its :data:`COOKIE_NAME` cookie, by setting
+    """Tell the client to drop this gate's session cookie, by setting
     the same cookie to an empty value with ``max_age=0`` -- through
     :func:`set_session_cookie`, so it carries exactly the attributes the
     login form and ``oidc.py`` issue it with over the same scheme, which
@@ -258,7 +296,7 @@ def build_gate_middleware(
     """Return an aiohttp ``@web.middleware`` function that rejects any
     request lacking ``credential`` -- as ``Authorization: Bearer
     <credential>`` (an automated HTTP client's own request) or, when
-    ``sessions`` is supplied, as a ``curu_auth`` cookie carrying a token
+    ``sessions`` is supplied, as a session cookie carrying a token
     :meth:`SessionStore.issue` minted (a human browsing ComfyUI's own UI
     directly, who has no way to attach a custom header) -- covers every
     route on the app it's installed into, including a websocket route's
@@ -295,7 +333,7 @@ def build_gate_middleware(
 
     Only a request that actually **offered** a credential and got it
     wrong records a failure against that limiter. A request carrying no
-    ``Authorization`` header and no ``curu_auth`` cookie tested nothing,
+    ``Authorization`` header and no session cookie tested nothing,
     so it is not an authentication attempt -- it still gets its 401
     (identical body, identical ``Accept: text/html`` redirect) and still
     logs the same fail2ban/crowdsec warning line, it simply does not
@@ -315,7 +353,7 @@ def build_gate_middleware(
     could ever succeed. "Offered" is therefore deliberately as wide as
     possible short of that -- any non-blank ``Authorization`` header
     counts, however malformed (``Basic ...``, a bare ``Bearer``, plain
-    garbage), and so does any non-blank ``curu_auth`` cookie, since a
+    garbage), and so does any non-blank session cookie, since a
     session token is the gate's other accepted credential and must not
     become the unrated path. Only a blank or absent value is exempt, and
     a blank value can never equal ``Bearer <credential>``, so exempting
@@ -326,7 +364,7 @@ def build_gate_middleware(
     -- an actual whitespace cookie value is a wrong credential, and
     "count it" is the safe direction to be wrong in.
 
-    A rejected request that *presented* a ``curu_auth`` cookie the
+    A rejected request that *presented* a session cookie the
     ``sessions`` store does not recognise gets that cookie expired on the
     rejecting response (:func:`_expire_session_cookie`), on every one of
     the four branches such a request can leave by: the 401, the
@@ -401,7 +439,9 @@ def build_gate_middleware(
         # gate would never accept this cookie under any value, so
         # presenting one cannot be an authentication attempt.
         supplied_cookie = (
-            request.cookies.get(COOKIE_NAME, "") if sessions is not None else ""
+            request.cookies.get(session_cookie_name(request), "")
+            if sessions is not None
+            else ""
         )
         if (
             supplied_cookie
@@ -988,7 +1028,7 @@ def build_login_routes(
 
 __all__ = [
     "COOKIE_MAX_AGE_SECONDS",
-    "COOKIE_NAME",
+    "COOKIE_NAME_PREFIX",
     "LOGIN_PATH",
     "REJECTION_HEADER",
     "REJECTION_VALUE",
@@ -1000,5 +1040,6 @@ __all__ = [
     "client_key",
     "generate_credential",
     "request_origin",
+    "session_cookie_name",
     "set_session_cookie",
 ]
