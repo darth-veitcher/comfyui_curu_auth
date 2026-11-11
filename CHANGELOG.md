@@ -26,6 +26,33 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 <!-- version list -->
 
+## v2.3.2 (2026-11-11)
+
+### Bug Fixes
+
+- **gate**: Name the session cookie with the port that the gate listens on
+  ([#30](https://github.com/darth-veitcher/comfyui_curu_auth/pull/30),
+  [`da6342f`](https://github.com/darth-veitcher/comfyui_curu_auth/commit/da6342f706a368766ee2e1d264ef84fe9de9ff48))
+
+### Chores
+
+- Start the bullet of the session cookie for each port
+  ([#30](https://github.com/darth-veitcher/comfyui_curu_auth/pull/30),
+  [`c703ba7`](https://github.com/darth-veitcher/comfyui_curu_auth/commit/c703ba7b46e3213e0b27f8b326afb2f225bb84c1))
+
+### Documentation
+
+- The session cookie of each instance holds its port
+  ([#30](https://github.com/darth-veitcher/comfyui_curu_auth/pull/30),
+  [`544f210`](https://github.com/darth-veitcher/comfyui_curu_auth/commit/544f210428f46ea2d45c77d25bdff2b695f14146))
+
+### Testing
+
+- **gate**: Two gates on one host keep their own session cookies
+  ([#30](https://github.com/darth-veitcher/comfyui_curu_auth/pull/30),
+  [`90b42b2`](https://github.com/darth-veitcher/comfyui_curu_auth/commit/90b42b25dd52d6032b2542eb2e7b6d5f370f775e))
+
+
 ## v2.3.1 (2026-11-03)
 
 ### Fixed
