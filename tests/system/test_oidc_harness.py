@@ -19,6 +19,7 @@ from tests.system.conftest import (
     AUTHELIA_HOST_HEADER,
     BASE_URL,
     OIDC_ENV,
+    SESSION_COOKIE,
     authelia_firstfactor_login,
     authelia_ssl_context,
     compose,
@@ -84,12 +85,12 @@ class TestOidcLoginAgainstRealAuthelia:
             assert callback_url.startswith(BASE_URL.replace("localhost", "127.0.0.1"))
 
             # 4. Follow the callback back to comfyui -- this is where the
-            # gate mints the curu_auth session (ADR-002/FR-003).
+            # gate mints the session cookie (ADR-002/FR-003).
             async with session.get(callback_url, allow_redirects=False) as response:
                 assert response.status == 200  # a page that moves on, not a redirect
                 set_cookie = response.headers.getall("Set-Cookie", [])
             curu_cookie = next(
-                (c for c in set_cookie if c.startswith("curu_auth=")), None
+                (c for c in set_cookie if c.startswith(f"{SESSION_COOKIE}=")), None
             )
             assert curu_cookie is not None
             curu_cookie_value = curu_cookie.split(";")[0].split("=", 1)[1]
@@ -101,7 +102,7 @@ class TestOidcLoginAgainstRealAuthelia:
         async with (
             aiohttp.ClientSession() as verify_session,
             verify_session.get(
-                BASE_URL, cookies={"curu_auth": curu_cookie_value}
+                BASE_URL, cookies={SESSION_COOKIE: curu_cookie_value}
             ) as response,
         ):
             assert response.status == 200

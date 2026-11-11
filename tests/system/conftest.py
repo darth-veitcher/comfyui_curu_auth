@@ -26,6 +26,10 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 BASE_URL = "http://localhost:8188"
 HEALTH_URL = f"{BASE_URL}/"
 COMFYUI_PORT = 8188
+#: The session cookie of the gate. Its name holds the port that ComfyUI
+#: listens on in the container, which docker-compose.yml maps to the same
+#: port on the host (issue #30).
+SESSION_COOKIE = f"curu_auth_{COMFYUI_PORT}"
 
 #: Fixed test credential this harness's docker-compose.yml pins via
 #: COMFYUI_CURU_AUTH_TOKEN (spec FR-003) -- never meaningful outside this

@@ -729,14 +729,14 @@ def _assert_moves_home_from_the_gate(response: Any, body: str) -> None:
 
 class TestOidcCallbackHandler:
     """The callback handler is the one place this feature mints a
-    session -- it MUST reuse the *existing* `SessionStore`/`curu_auth`
+    session -- it MUST reuse the *existing* `SessionStore`/session
     cookie mechanism (ADR-002/FR-003), not a new one, and MUST reject a
     mismatched or already-consumed `state` (FR-011)."""
 
     async def test_valid_callback_establishes_a_session_via_existing_sessionstore(
         self,
     ) -> None:
-        from gate import COOKIE_MAX_AGE_SECONDS, COOKIE_NAME, SessionStore
+        from gate import COOKIE_MAX_AGE_SECONDS, COOKIE_NAME_PREFIX, SessionStore
         from oidc import AuthorizationRequestStore, OIDCConfig, build_oidc_routes
 
         key = _generate_rsa_key()
@@ -775,9 +775,13 @@ class TestOidcCallbackHandler:
                     allow_redirects=False,
                 )
                 body = await response.text()
+                port = node_client.server.port
 
         _assert_moves_home_from_the_gate(response, body)
-        cookie = response.cookies.get(COOKIE_NAME)
+        # The name holds the port that this gate listens on (issue #30).
+        name = f"{COOKIE_NAME_PREFIX}_{port}"
+        assert set(response.cookies) == {name}
+        cookie = response.cookies.get(name)
         assert cookie is not None
         assert sessions.is_valid(cookie.value)
         assert cookie["max-age"] == str(COOKIE_MAX_AGE_SECONDS)
@@ -820,7 +824,7 @@ class TestOidcCallbackHandler:
                 )
 
         assert response.status not in (302, 303, 307)
-        assert "curu_auth" not in response.cookies
+        assert not [key for key in response.cookies if key.startswith("curu_auth")]
 
     async def test_provider_error_param_does_not_establish_a_session(self) -> None:
         from gate import SessionStore
@@ -851,7 +855,7 @@ class TestOidcCallbackHandler:
             )
 
         assert response.status not in (302, 303, 307)
-        assert "curu_auth" not in response.cookies
+        assert not [key for key in response.cookies if key.startswith("curu_auth")]
 
     async def test_replaying_a_completed_callback_verbatim_is_rejected(self) -> None:
         from gate import SessionStore
@@ -894,7 +898,7 @@ class TestOidcCallbackHandler:
 
         # Refused, not merely "not a redirect": a good callback answers 200 too.
         assert second.status == 401
-        assert "curu_auth" not in second.cookies
+        assert not [key for key in second.cookies if key.startswith("curu_auth")]
 
     async def test_a_rejected_callback_is_logged_via_the_existing_format(
         self, caplog: pytest.LogCaptureFixture
@@ -991,7 +995,7 @@ _START_PATH = "/curu-auth/oidc/start"
 
 
 class TestOidcCallbackCookieFollowsTheScheme:
-    """The callback mints the same ``curu_auth`` cookie the login form does
+    """The callback mints the same session cookie the login form does
     (ADR-002), so it must follow the same ``Secure`` rule (ADR-006): an IdP
     login that lands an operator back on a plain-HTTP LAN host would
     otherwise end exactly like the credential form did -- a cookie the
@@ -1036,7 +1040,7 @@ class TestOidcCallbackCookieFollowsTheScheme:
         set_cookie = [
             value
             for value in response.headers.getall("Set-Cookie", [])
-            if value.startswith("curu_auth=")
+            if value.startswith(f"curu_auth_{response.url.port}=")
         ]
         assert len(set_cookie) == 1, set_cookie
         return {part.strip() for part in set_cookie[0].split(";")[1:]}

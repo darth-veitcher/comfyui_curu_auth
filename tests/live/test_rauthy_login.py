@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import sys
 from typing import Any
+from urllib.parse import urlsplit
 
 import pytest
 
@@ -81,7 +82,7 @@ async def _log_in(gate_url: str) -> tuple[list[dict[str, Any]], int, int, str]:
             cookies = [
                 dict(cookie)
                 for cookie in await context.cookies(gate_url)
-                if cookie.get("name") == "curu_auth"
+                if cookie.get("name") == f"curu_auth_{urlsplit(gate_url).port}"
             ]
             queue = await context.request.get(f"{gate_url}/queue")
             return cookies, (callbacks or [0])[-1], queue.status, page.url

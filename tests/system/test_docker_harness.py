@@ -20,6 +20,7 @@ from gate import LOGIN_PATH
 from tests.system.conftest import (
     AUTH_HEADERS,
     BASE_URL,
+    SESSION_COOKIE,
     TEST_AUTH_TOKEN,
     compose,
     wait_until_reachable,
@@ -199,7 +200,7 @@ class TestTeardownAndRestartLeavesNoStaleState:
                 LOGIN_URL, data={"token": TEST_AUTH_TOKEN}, allow_redirects=False
             ) as login_response:
                 assert login_response.status == 302
-                stale_cookie = login_response.cookies["curu_auth"].value
+                stale_cookie = login_response.cookies[SESSION_COOKIE].value
             # The jar now holds the valid session cookie. Since ADR-006 it
             # has no Secure flag over plain HTTP, so the jar sends it, and
             # the wrong Bearer header below would pass with HTTP 200.
@@ -225,7 +226,7 @@ class TestTeardownAndRestartLeavesNoStaleState:
 
         async with aiohttp.ClientSession() as session:
             async with session.get(
-                BASE_URL, cookies={"curu_auth": stale_cookie}
+                BASE_URL, cookies={SESSION_COOKIE: stale_cookie}
             ) as stale_cookie_response:
                 assert stale_cookie_response.status == 401, (
                     "old session cookie was still accepted after restart"
@@ -241,7 +242,7 @@ class TestTeardownAndRestartLeavesNoStaleState:
                 expiries = [
                     value
                     for value in stale_cookie_response.headers.getall("Set-Cookie", [])
-                    if value.startswith("curu_auth=") and "Max-Age=0" in value
+                    if value.startswith(f"{SESSION_COOKIE}=") and "Max-Age=0" in value
                 ]
                 assert expiries, (
                     "stale session cookie was rejected but not expired: "

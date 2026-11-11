@@ -22,7 +22,7 @@ from aiohttp.test_utils import TestClient, TestServer, make_mocked_request
 
 from gate import (
     COOKIE_MAX_AGE_SECONDS,
-    COOKIE_NAME,
+    COOKIE_NAME_PREFIX,
     LOGIN_PATH,
     RateLimiter,
     SessionStore,
@@ -31,6 +31,7 @@ from gate import (
     client_key,
     generate_credential,
     resolve_persistent_credential,
+    session_cookie_name,
 )
 
 # --------------------------------------------------------------------------
@@ -146,6 +147,174 @@ async def _ok_handler(request: web.Request) -> web.Response:
     return web.json_response({"ok": True})
 
 
+def _cookie_name(client: TestClient) -> str:
+    """The session-cookie name of the gate behind ``client``: the prefix
+    and the port that its test server listens on (issue #30)."""
+
+    return f"{COOKIE_NAME_PREFIX}_{client.server.port}"
+
+
+# --------------------------------------------------------------------------
+# The session-cookie name holds the port that the gate listens on (issue
+# #30). A browser keys cookies by host, not by port (RFC 6265, section 8.5),
+# so two gates on one host with one fixed name shared one cookie.
+# --------------------------------------------------------------------------
+
+
+class _SocknameTransport:
+    """Just enough of a transport for :func:`session_cookie_name`: it reads
+    the local address through ``get_extra_info("sockname")``."""
+
+    def __init__(self, sockname: object) -> None:
+        self._sockname = sockname
+
+    def get_extra_info(self, name: str) -> object:
+        return self._sockname if name == "sockname" else None
+
+
+def _request_on(sockname: object, headers: dict[str, str] | None = None):
+    return make_mocked_request(
+        "GET", "/", headers=headers or {}, transport=_SocknameTransport(sockname)
+    )
+
+
+class TestTheSessionCookieNameHoldsTheListeningPort:
+    def test_an_ipv4_listener_names_its_port(self) -> None:
+        assert session_cookie_name(_request_on(("0.0.0.0", 8188))) == "curu_auth_8188"
+
+    def test_an_ipv6_listener_names_its_port(self) -> None:
+        name = session_cookie_name(_request_on(("::", 8189, 0, 0)))
+        assert name == "curu_auth_8189"
+
+    def test_the_host_header_does_not_choose_the_port(self) -> None:
+        # The client writes `Host`, and behind a reverse proxy it holds 443
+        # for every instance. Only the local socket names the gate.
+        request = _request_on(
+            ("127.0.0.1", 8190),
+            {"Host": "comfyui.example.com:443", "X-Forwarded-Host": "x:9"},
+        )
+        assert session_cookie_name(request) == "curu_auth_8190"
+
+    @pytest.mark.parametrize(
+        "sockname",
+        [None, "/run/comfyui.sock", "", ("127.0.0.1",), ("127.0.0.1", "8188")],
+        ids=["no-address", "unix-socket", "abstract-socket", "no-port", "text-port"],
+    )
+    def test_with_no_port_to_read_the_port_part_is_0(self, sockname: object) -> None:
+        assert session_cookie_name(_request_on(sockname)) == "curu_auth_0"
+
+    def test_with_no_transport_the_port_part_is_0(self) -> None:
+        request = _request_on(("127.0.0.1", 8188))
+        request.protocol.transport = None  # the connection closed
+        assert session_cookie_name(request) == "curu_auth_0"
+
+
+async def _start(app: web.Application) -> TestServer:
+    server = TestServer(app)
+    await server.start_server()
+    return server
+
+
+class TestTwoGatesOnOneHostKeepTheirOwnLogins:
+    """Two gates on one host and two ports, and one browser cookie jar.
+    aiohttp's jar, like a browser, sends a cookie of a host to each port of
+    that host, so this is the operator's own case on orange-box."""
+
+    async def _two_gates(self) -> tuple[TestServer, TestServer]:
+        first = await _start(_app_with_login("credential-a"))
+        second = await _start(_app_with_login("credential-b"))
+        return first, second
+
+    async def test_a_login_to_b_does_not_log_out_a(self) -> None:
+        first, second = await self._two_gates()
+        jar = aiohttp.CookieJar(unsafe=True)
+        try:
+            async with aiohttp.ClientSession(cookie_jar=jar) as browser:
+                for server, credential in (
+                    (first, "credential-a"),
+                    (second, "credential-b"),
+                ):
+                    login = await browser.post(
+                        server.make_url(LOGIN_PATH),
+                        data={"token": credential},
+                        allow_redirects=False,
+                    )
+                    assert login.status == 302
+
+                assert {cookie.key for cookie in jar} == {
+                    f"curu_auth_{first.port}",
+                    f"curu_auth_{second.port}",
+                }
+                for server in (first, second):
+                    served = await browser.get(server.make_url("/anything"))
+                    assert served.status == 200
+        finally:
+            await first.close()
+            await second.close()
+
+    async def test_the_cookie_of_a_is_not_accepted_by_b(self) -> None:
+        first, second = await self._two_gates()
+        try:
+            async with aiohttp.ClientSession() as browser:
+                login = await browser.post(
+                    first.make_url(LOGIN_PATH),
+                    data={"token": "credential-a"},
+                    allow_redirects=False,
+                )
+                token = login.cookies[f"curu_auth_{first.port}"].value
+
+                # B reads only its own name, so A's cookie is not a
+                # credential there: no session, and no expiry of it.
+                under_a_name = await browser.get(
+                    second.make_url("/anything"),
+                    headers={"Cookie": f"curu_auth_{first.port}={token}"},
+                )
+                assert under_a_name.status == 401
+                assert "Set-Cookie" not in under_a_name.headers
+
+                # A's token under B's name is unknown to B's own store.
+                under_b_name = await browser.get(
+                    second.make_url("/anything"),
+                    headers={"Cookie": f"curu_auth_{second.port}={token}"},
+                )
+                assert under_b_name.status == 401
+        finally:
+            await first.close()
+            await second.close()
+
+    async def test_the_expiry_of_a_stale_cookie_on_a_keeps_the_cookie_of_b(
+        self,
+    ) -> None:
+        first, second = await self._two_gates()
+        jar = aiohttp.CookieJar(unsafe=True)
+        try:
+            async with aiohttp.ClientSession(cookie_jar=jar) as browser:
+                login = await browser.post(
+                    second.make_url(LOGIN_PATH),
+                    data={"token": "credential-b"},
+                    allow_redirects=False,
+                )
+                assert login.status == 302
+                jar.update_cookies(
+                    {f"curu_auth_{first.port}": "from-before-a-restart"},
+                    response_url=first.make_url("/"),
+                )
+
+                rejected = await browser.get(first.make_url("/anything"))
+                assert rejected.status == 401
+                expired = rejected.headers.getall("Set-Cookie")
+                assert len(expired) == 1
+                assert expired[0].startswith(f"curu_auth_{first.port}=")
+                assert "Max-Age=0" in expired[0]
+
+                assert {cookie.key for cookie in jar} == {f"curu_auth_{second.port}"}
+                served = await browser.get(second.make_url("/anything"))
+                assert served.status == 200
+        finally:
+            await first.close()
+            await second.close()
+
+
 # --------------------------------------------------------------------------
 # Reaching a TestServer the three ways a browser can reach this gate --
 # shared by every test whose expected cookie depends on the scheme (ADR-006).
@@ -241,14 +410,15 @@ def _client_via(
 
 
 def _session_cookie_attributes(response: aiohttp.ClientResponse) -> set[str]:
-    """The attribute set of the one ``curu_auth`` ``Set-Cookie`` header on
+    """The attribute set of the one session-cookie ``Set-Cookie`` header on
     ``response`` -- the header the client actually received, not
-    ``set_cookie``'s arguments."""
+    ``set_cookie``'s arguments. The test server listens on the port of
+    ``response.url``, so that port names the cookie."""
 
     set_cookie = [
         value
         for value in response.headers.getall("Set-Cookie", [])
-        if value.startswith(f"{COOKIE_NAME}=")
+        if value.startswith(f"{COOKIE_NAME_PREFIX}_{response.url.port}=")
     ]
     assert len(set_cookie) == 1, set_cookie
     return {part.strip() for part in set_cookie[0].split(";")[1:]}
@@ -453,7 +623,7 @@ class TestBearerAuthIsRateLimited:
             )
             assert blocked.status == 401
 
-            client.session.cookie_jar.update_cookies({COOKIE_NAME: token})
+            client.session.cookie_jar.update_cookies({_cookie_name(client): token})
             response = await client.get("/anything")
             assert response.status == 200
 
@@ -666,7 +836,7 @@ class TestOfferingNoCredentialIsNotAFailedAttempt:
 
         async with TestClient(TestServer(app)) as client:
             client.session.cookie_jar.update_cookies(
-                {COOKIE_NAME: "never-issued-token"},
+                {_cookie_name(client): "never-issued-token"},
                 response_url=client.make_url("/"),
             )
             rejected = await client.get("/anything")
@@ -705,7 +875,7 @@ class TestOfferingNoCredentialIsNotAFailedAttempt:
 
 
 class TestAStaleSessionCookieIsExpiredNotReplayedForever:
-    """A ``curu_auth`` cookie the current :class:`SessionStore` cannot
+    """A session cookie the current :class:`SessionStore` cannot
     recognise must be *expired* by the very response that rejects it, so
     the client stops sending it.
 
@@ -775,7 +945,7 @@ class TestAStaleSessionCookieIsExpiredNotReplayedForever:
 
         async with TestClient(TestServer(app)) as client:
             client.session.cookie_jar.update_cookies(
-                {COOKIE_NAME: stale_token},
+                {_cookie_name(client): stale_token},
                 response_url=client.make_url("/"),
             )
             for _ in range(253):
@@ -826,7 +996,7 @@ class TestAStaleSessionCookieIsExpiredNotReplayedForever:
             client.session.cookie_jar.clear()
             rejected = await client.get(
                 "/anything",
-                headers={**headers, "Cookie": f"{COOKIE_NAME}={stale_token}"},
+                headers={**headers, "Cookie": f"{_cookie_name(client)}={stale_token}"},
             )
 
         assert rejected.status == 401
@@ -861,15 +1031,17 @@ class TestAStaleSessionCookieIsExpiredNotReplayedForever:
 
         async with TestClient(TestServer(app)) as client:
             client.session.cookie_jar.update_cookies(
-                {COOKIE_NAME: stale_token},
+                {_cookie_name(client): stale_token},
                 response_url=client.make_url("/"),
             )
-            assert COOKIE_NAME in {cookie.key for cookie in client.session.cookie_jar}
+            assert _cookie_name(client) in {
+                cookie.key for cookie in client.session.cookie_jar
+            }
 
             rejected = await client.get("/anything")
             assert rejected.status == 401
             assert await rejected.json() == {"detail": "missing or invalid credential"}
-            assert COOKIE_NAME not in {
+            assert _cookie_name(client) not in {
                 cookie.key for cookie in client.session.cookie_jar
             }
 
@@ -897,12 +1069,12 @@ class TestAStaleSessionCookieIsExpiredNotReplayedForever:
 
         async with TestClient(TestServer(app)) as client:
             client.session.cookie_jar.update_cookies(
-                {COOKIE_NAME: stale_token},
+                {_cookie_name(client): stale_token},
                 response_url=client.make_url("/"),
             )
             blocked = await client.get("/anything")
             assert blocked.status == 429
-            assert COOKIE_NAME not in {
+            assert _cookie_name(client) not in {
                 cookie.key for cookie in client.session.cookie_jar
             }
 
@@ -926,7 +1098,7 @@ class TestAStaleSessionCookieIsExpiredNotReplayedForever:
 
         async with TestClient(TestServer(app)) as client:
             client.session.cookie_jar.update_cookies(
-                {COOKIE_NAME: stale_token},
+                {_cookie_name(client): stale_token},
                 response_url=client.make_url("/"),
             )
             redirected = await client.get(
@@ -934,7 +1106,7 @@ class TestAStaleSessionCookieIsExpiredNotReplayedForever:
             )
             assert redirected.status == 302
             assert redirected.headers["Location"] == LOGIN_PATH
-            assert COOKIE_NAME not in {
+            assert _cookie_name(client) not in {
                 cookie.key for cookie in client.session.cookie_jar
             }
 
@@ -956,7 +1128,7 @@ class TestAStaleSessionCookieIsExpiredNotReplayedForever:
 
         async with TestClient(TestServer(app)) as client:
             client.session.cookie_jar.update_cookies(
-                {COOKIE_NAME: stale_token},
+                {_cookie_name(client): stale_token},
                 response_url=client.make_url("/"),
             )
             redirected = await client.get(
@@ -964,7 +1136,7 @@ class TestAStaleSessionCookieIsExpiredNotReplayedForever:
             )
             assert redirected.status == 302
             assert redirected.headers["Location"] == LOGIN_PATH
-            assert COOKIE_NAME not in {
+            assert _cookie_name(client) not in {
                 cookie.key for cookie in client.session.cookie_jar
             }
 
@@ -982,12 +1154,14 @@ class TestAStaleSessionCookieIsExpiredNotReplayedForever:
 
         async with TestClient(TestServer(app)) as client:
             client.session.cookie_jar.update_cookies(
-                {COOKIE_NAME: token}, response_url=client.make_url("/")
+                {_cookie_name(client): token}, response_url=client.make_url("/")
             )
             served = await client.get("/anything")
             assert served.status == 200
             assert "Set-Cookie" not in served.headers
-            assert COOKIE_NAME in {cookie.key for cookie in client.session.cookie_jar}
+            assert _cookie_name(client) in {
+                cookie.key for cookie in client.session.cookie_jar
+            }
 
     async def test_a_request_carrying_no_cookie_gets_no_expiry_header(self) -> None:
         # No cookie was offered, so there is nothing to expire -- a
@@ -1007,7 +1181,7 @@ class TestAStaleSessionCookieIsExpiredNotReplayedForever:
 
     async def test_cookie_auth_disabled_never_expires_anything(self) -> None:
         # `sessions=None` disables cookie auth entirely: the gate does not
-        # read `curu_auth`, would not accept it under any value, and has no
+        # read its session cookie, would not accept it under any value, and has no
         # business deleting a cookie of that name it never issued and that
         # may well belong to something else.
         app = web.Application(middlewares=[build_gate_middleware("expected-token")])
@@ -1015,13 +1189,15 @@ class TestAStaleSessionCookieIsExpiredNotReplayedForever:
 
         async with TestClient(TestServer(app)) as client:
             client.session.cookie_jar.update_cookies(
-                {COOKIE_NAME: "not-this-gate's-cookie"},
+                {_cookie_name(client): "not-this-gate's-cookie"},
                 response_url=client.make_url("/"),
             )
             rejected = await client.get("/anything")
             assert rejected.status == 401
             assert "Set-Cookie" not in rejected.headers
-            assert COOKIE_NAME in {cookie.key for cookie in client.session.cookie_jar}
+            assert _cookie_name(client) in {
+                cookie.key for cookie in client.session.cookie_jar
+            }
 
     async def test_an_unrecognised_cookie_still_counts_as_an_attempt(self) -> None:
         # ADR-004's rule is deliberately untouched by this fix. The *first*
@@ -1041,7 +1217,7 @@ class TestAStaleSessionCookieIsExpiredNotReplayedForever:
 
         async with TestClient(TestServer(app)) as client:
             client.session.cookie_jar.update_cookies(
-                {COOKIE_NAME: "never-issued-token"},
+                {_cookie_name(client): "never-issued-token"},
                 response_url=client.make_url("/"),
             )
             rejected = await client.get("/anything")
@@ -1067,7 +1243,7 @@ class TestAStaleSessionCookieIsExpiredNotReplayedForever:
         with caplog.at_level("WARNING", logger="comfyui_curu_auth"):
             async with TestClient(TestServer(app)) as client:
                 client.session.cookie_jar.update_cookies(
-                    {COOKIE_NAME: "never-issued-token"},
+                    {_cookie_name(client): "never-issued-token"},
                     response_url=client.make_url("/"),
                 )
                 await client.get(
@@ -1287,8 +1463,8 @@ class TestLoginSubmission:
             assert "SameSite=Strict" in set_cookie
             # The cookie's own value is a distinct, minted session token --
             # never the master credential itself.
-            assert f"{COOKIE_NAME}=expected-token" not in set_cookie
-            assert f"{COOKIE_NAME}=" in set_cookie
+            assert f"{_cookie_name(client)}=expected-token" not in set_cookie
+            assert f"{_cookie_name(client)}=" in set_cookie
 
     async def test_the_wrong_token_is_rejected_and_sets_no_cookie(self) -> None:
         app = _app_with_login("expected-token")
@@ -1318,7 +1494,7 @@ class TestLoginSubmission:
 
 
 class TestTheSessionCookieIsSecureExactlyWhenTheBrowserUsedHttps:
-    """``Secure`` on the ``curu_auth`` cookie follows the scheme the
+    """``Secure`` on the session cookie follows the scheme the
     *browser* used -- ADR-006.
 
     It used to be unconditional, which was right while the gate was only
@@ -1462,7 +1638,7 @@ class TestCookieAuthenticatesLikeTheHeaderDoes:
 
         async with TestClient(TestServer(app)) as client:
             client.session.cookie_jar.update_cookies(
-                {COOKIE_NAME: token}, response_url=client.make_url("/")
+                {_cookie_name(client): token}, response_url=client.make_url("/")
             )
             response = await client.get("/anything")
             assert response.status == 200
@@ -1474,7 +1650,8 @@ class TestCookieAuthenticatesLikeTheHeaderDoes:
 
         async with TestClient(TestServer(app)) as client:
             client.session.cookie_jar.update_cookies(
-                {COOKIE_NAME: "never-issued-token"}, response_url=client.make_url("/")
+                {_cookie_name(client): "never-issued-token"},
+                response_url=client.make_url("/"),
             )
             response = await client.get("/anything")
             assert response.status == 401
@@ -1488,7 +1665,8 @@ class TestCookieAuthenticatesLikeTheHeaderDoes:
 
         async with TestClient(TestServer(app)) as client:
             client.session.cookie_jar.update_cookies(
-                {COOKIE_NAME: "expected-token"}, response_url=client.make_url("/")
+                {_cookie_name(client): "expected-token"},
+                response_url=client.make_url("/"),
             )
             response = await client.get("/anything")
             assert response.status == 401
@@ -1784,7 +1962,7 @@ class TestClientKey:
 
 
 class TestBrowserUsedHttps:
-    """The one rule every ``curu_auth`` ``Set-Cookie`` follows (ADR-006),
+    """The one rule every session-cookie ``Set-Cookie`` follows (ADR-006),
     on its own: HTTPS if this connection is TLS, or if the proxy in front
     of it reports that the browser's own hop was."""
 
@@ -1890,7 +2068,8 @@ class TestAGateRejectionIsMarked:
 
         async with TestClient(TestServer(app)) as client:
             response = await client.get(
-                "/api/jobs", headers={"Cookie": f"{COOKIE_NAME}=from-before-a-restart"}
+                "/api/jobs",
+                headers={"Cookie": f"{_cookie_name(client)}=from-before-a-restart"},
             )
             assert response.status == 401
             assert response.headers.get(_MARK[0]) == _MARK[1]
@@ -1956,7 +2135,7 @@ class TestAGateRejectionIsMarked:
 
         async with TestClient(TestServer(app)) as client:
             response = await client.get(
-                "/anything", headers={"Cookie": f"{COOKIE_NAME}={session}"}
+                "/anything", headers={"Cookie": f"{_cookie_name(client)}={session}"}
             )
             assert response.status == 200
             assert _MARK[0] not in response.headers
@@ -2069,7 +2248,8 @@ class TestTheContribPatternsMatchEachLogLine:
                 await client.get("/api/jobs", headers=address)
                 await client.get("/ws", headers=address)
                 await client.get(
-                    "/api/jobs", headers={**address, "Cookie": f"{COOKIE_NAME}=stale"}
+                    "/api/jobs",
+                    headers={**address, "Cookie": f"{_cookie_name(client)}=stale"},
                 )
                 await client.get(
                     "/api/jobs",
