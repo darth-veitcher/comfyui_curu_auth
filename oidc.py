@@ -1,7 +1,7 @@
 """OIDC/OAuth login path -- optional, additive to comfyui_curu_auth's
 default zero-config bearer-token gate. Never active unless fully
 configured (:func:`resolve_oidc_config`); on success, mints a session
-through the exact same :class:`gate.SessionStore`/``curu_auth`` cookie
+through the exact same :class:`gate.SessionStore` and session cookie
 mechanism the existing login form already uses (ADR-002) -- not a second,
 parallel session mechanism.
 
