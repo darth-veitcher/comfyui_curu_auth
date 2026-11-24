@@ -18,6 +18,32 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 <!-- version list -->
 
+## v2.5.0 (2026-11-24)
+
+### Chores
+
+- **beacon**: Start the bullet feat/trusted-proxies
+  ([`45c8b8b`](https://github.com/darth-veitcher/comfyui_curu_auth/commit/45c8b8b1c3a697af0ac4a0ffa2a40544de17b1e8))
+
+### Documentation
+
+- Count the wait for each client behind a proxy (ADR-011)
+  ([`8d9178e`](https://github.com/darth-veitcher/comfyui_curu_auth/commit/8d9178eabc81c63f0497750edbf39095f854b225))
+
+### Features
+
+- **gate**: Trusted proxies name the client behind X-Forwarded-For
+  ([`1a29bb8`](https://github.com/darth-veitcher/comfyui_curu_auth/commit/1a29bb81b3702b1bdedfeb32e9d47fa46b8a1e29))
+
+### Testing
+
+- **gate**: Behind a trusted proxy each browser gets its own wait
+  ([`3959393`](https://github.com/darth-veitcher/comfyui_curu_auth/commit/395939316f37a71735e903875fc2ad032666a1d7))
+
+- **readme**: The trusted-proxies example passes the setting check
+  ([`390a8ad`](https://github.com/darth-veitcher/comfyui_curu_auth/commit/390a8ade6bcaaa8a79a6ca1e0c68a0082d6e39b5))
+
+
 ## v2.4.0 (2026-11-24)
 
 ### Documentation
