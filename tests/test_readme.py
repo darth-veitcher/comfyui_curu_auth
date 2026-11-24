@@ -38,6 +38,7 @@ _SETTINGS_TEST = "test_each_setting_of_the_readme_is_read"
 _CREDENTIAL_TEST = "test_the_credential_example_makes_a_credential"
 _REDIRECT_URIS_TEST = "test_the_list_of_redirect_uris_gives_two_uris"
 _RESOLVE_TEST = "test_the_resolve_example_gives_one_address"
+_TRUSTED_PROXIES_TEST = "test_the_trusted_proxies_example_gives_two_networks"
 
 #: A text that only one block holds -> the test below that runs that block.
 RUN = {
@@ -46,6 +47,7 @@ RUN = {
     "COMFYUI_CURU_AUTH_OIDC_ALLOWED_SUBJECTS=": _SETTINGS_TEST,
     'COMFYUI_CURU_AUTH_OIDC_REDIRECT_URI="http://': _REDIRECT_URIS_TEST,
     "COMFYUI_CURU_AUTH_OIDC_RESOLVE=": _RESOLVE_TEST,
+    "COMFYUI_CURU_AUTH_TRUSTED_PROXIES=": _TRUSTED_PROXIES_TEST,
 }
 
 
@@ -102,6 +104,16 @@ def test_the_resolve_example_gives_one_address() -> None:
     network = resolve_oidc_network(resolve=match.group(1), ca_file=None)
 
     assert len(network.addresses) == 1
+
+
+def test_the_trusted_proxies_example_gives_two_networks() -> None:
+    """The example of the trusted proxies passes the setting check."""
+    from gate import resolve_trusted_proxies
+
+    match = re.search(r'COMFYUI_CURU_AUTH_TRUSTED_PROXIES="([^"]+)"', README)
+    assert match is not None
+
+    assert len(resolve_trusted_proxies(match.group(1))) == 2
 
 
 def test_each_setting_of_the_readme_is_read() -> None:

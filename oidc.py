@@ -1208,6 +1208,7 @@ def build_oidc_routes(
     sessions: SessionStore,
     store: AuthorizationRequestStore,
     rate_limiter: RateLimiter | None = None,
+    trusted_proxies: tuple[ipaddress.IPv4Network | ipaddress.IPv6Network, ...] = (),
 ) -> tuple[Handler, Handler]:
     """Return ``(start, callback)`` handlers for the OIDC login path,
     mirroring :func:`gate.build_login_routes`'s own shape.
@@ -1231,7 +1232,7 @@ def build_oidc_routes(
 
     async def start(request: web.Request) -> web.StreamResponse:
         if rate_limiter is not None:
-            key = client_key(request)
+            key = client_key(request, trusted_proxies=trusted_proxies)
             retry_after = rate_limiter.seconds_until_retry(key)
             if retry_after > 0:
                 seconds = int(retry_after) + 1
@@ -1293,7 +1294,7 @@ def build_oidc_routes(
         raise web.HTTPUnauthorized(text="OIDC login failed") from cause
 
     async def callback(request: web.Request) -> web.StreamResponse:
-        key = client_key(request)
+        key = client_key(request, trusted_proxies=trusted_proxies)
 
         state = request.query.get("state", "")
         in_flight = store.pop(state) if state else None

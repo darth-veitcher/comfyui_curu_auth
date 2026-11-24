@@ -41,3 +41,4 @@ Superseded ADRs keep their file; update their status to `Superseded by ADR-###`.
 | [ADR-008](ADR-008-oidc-access-tokens-on-the-bearer-path.md) | The Bearer path also accepts a short-lived OIDC access token, in an opt-in resource-server mode | Accepted | 2026-11-01 |
 | [ADR-009](ADR-009-a-module-in-the-comfyui-page-acts-on-a-gate-rejection.md) | A module in the ComfyUI page sends the tab to the login page on a gate rejection | Accepted | 2026-11-02 |
 | [ADR-010](ADR-010-the-session-cookie-name-holds-the-listening-port.md) | The name of the session cookie holds the port that the gate listens on | Accepted | 2026-11-11 |
+| [ADR-011](ADR-011-trusted-proxies-name-the-client-address.md) | A list of trusted proxies decides which X-Forwarded-For entry is the client | Accepted | 2026-11-24 |
