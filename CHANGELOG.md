@@ -17,6 +17,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 <!-- version list -->
 
+## v2.4.0 (2026-11-24)
+
+### Documentation
+
+- Reach an identity provider on a private network
+  ([`229e3b4`](https://github.com/darth-veitcher/comfyui_curu_auth/commit/229e3b4b4e61bbd71c115a13e4f950fb40811f8b))
+
+### Features
+
+- **oidc**: Reach the identity provider through a set address and an extra CA
+  ([`508cf2f`](https://github.com/darth-veitcher/comfyui_curu_auth/commit/508cf2fab5a6c9725bd4b1fee1aee244a5e725bf))
+
+### Testing
+
+- **oidc**: The gate reaches an issuer through a set address and an extra CA
+  ([`0011339`](https://github.com/darth-veitcher/comfyui_curu_auth/commit/0011339f752fc9548c8b201f4a1db4cab46614dc))
+
+
 ## v2.3.2 (2026-11-11)
 
 ### Bug Fixes
