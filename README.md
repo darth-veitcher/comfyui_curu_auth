@@ -18,6 +18,7 @@ comfyui_curu_auth is a ComfyUI custom node that puts a credential in front of yo
 | Log in with your identity provider at more than one address | A list in `COMFYUI_CURU_AUTH_OIDC_REDIRECT_URI` | [Log in through your identity provider at more than one address](#log-in-through-your-identity-provider-at-more-than-one-address) |
 | Reach an identity provider that the DNS or the trust of the host does not know | `COMFYUI_CURU_AUTH_OIDC_RESOLVE`, `COMFYUI_CURU_AUTH_OIDC_CA_FILE` | [Reach an identity provider on a private network](#reach-an-identity-provider-on-a-private-network) |
 | Choose HTTPS or plain HTTP | `X-Forwarded-Proto: https` at your proxy | [Use HTTPS or plain HTTP](#use-https-or-plain-http) |
+| Give each client behind a reverse proxy its own wait | `COMFYUI_CURU_AUTH_TRUSTED_PROXIES` | [Count the wait for each client behind a proxy](#count-the-wait-for-each-client-behind-a-proxy) |
 | Understand a 429 | Wait for `Retry-After` | [Recover from repeated failures](#recover-from-repeated-failures) |
 | Block attackers at the firewall | `contrib/fail2ban`, `contrib/crowdsec` | [Block repeat offenders at the firewall](#block-repeat-offenders-at-the-firewall) |
 
@@ -233,11 +234,33 @@ Plain HTTP has a cost. The session cookie, the credential in the form and each `
 
 To check your proxy, log in through it and read the `Set-Cookie` of the response. It must end in `; Secure`. If it does not, configure your proxy to send `X-Forwarded-Proto` or `Forwarded`.
 
+## Count the wait for each client behind a proxy
+
+Do this when ComfyUI is behind a reverse proxy, and one wrong login makes all people wait. Set the addresses that the proxy uses to connect to ComfyUI:
+
+```bash
+export COMFYUI_CURU_AUTH_TRUSTED_PROXIES="192.168.1.117, 10.89.1.0/24"
+```
+
+| Setting | Meaning | Default |
+|---|---|---|
+| `COMFYUI_CURU_AUTH_TRUSTED_PROXIES` | The IP addresses and CIDR networks of your proxies, with a comma or a space between them. | empty: the first entry of `X-Forwarded-For` |
+
+Restart ComfyUI, and check the console for `Trusted proxies`.
+
+The gate then reads `X-Forwarded-For` only from a trusted proxy. Each proxy adds the address of its client to the right end of that header. The gate reads the header from the right, and takes the first address that is not a trusted proxy. That address is the client: it gets its own wait, and it is in the `authentication failure from` line. A client that connects to ComfyUI directly is known by its own address, so it cannot choose another one.
+
+To find the address of your proxy, look at the address after `from` in a failure line of the console. Give only the addresses of your proxies. A trusted address that a person can use lets that person choose the address of a client.
+
+An entry that is not an IP address or a network is a setup error, for example `proxy.lan` or `10.0.0.1/24`. The console then shows `COMFYUI_CURU_AUTH_TRUSTED_PROXIES:` with the entry, and the gate trusts no proxy. The gate stays on.
+
+The gate knows only what the proxy knows. If the proxy itself sees all clients at one address, the clients still share one wait. Rootless podman port forwarding does this, for example. Then configure the proxy to see the real client address.
+
 ## Recover from repeated failures
 
 <img src="docs/screenshots/rate-limited.png" width="480" alt="Rate-limited login screen with a live countdown">
 
-After a wrong credential, the gate makes that caller wait before its next try. A caller is one client address. The wait doubles after each failure: 1 s, 2 s, 4 s, and up to 5 minutes. During the wait, a program gets HTTP 429 with `Retry-After`, except for an access token when the access tokens are on. The gate checks such a token and gives the answer of ComfyUI, HTTP 401 or HTTP 503. A browser goes to the login page. A correct attempt sets the wait to zero again. The login page shows a countdown, so you do not need to reload it.
+After a wrong credential, the gate makes that caller wait before its next try. A caller is one client address. Behind a reverse proxy, set [the trusted proxies](#count-the-wait-for-each-client-behind-a-proxy), so that each client gets its own wait. The wait doubles after each failure: 1 s, 2 s, 4 s, and up to 5 minutes. During the wait, a program gets HTTP 429 with `Retry-After`, except for an access token when the access tokens are on. The gate checks such a token and gives the answer of ComfyUI, HTTP 401 or HTTP 503. A browser goes to the login page. A correct attempt sets the wait to zero again. The login page shows a countdown, so you do not need to reload it.
 
 The same wait applies to the login form, the Bearer header, access tokens and the OIDC login. Each request to `/curu-auth/oidc/start` counts as one failure, because each one makes the gate read the discovery document. A correct callback sets the wait to zero again. A session that is already open is never blocked.
 
@@ -269,7 +292,7 @@ The text after `from` is the address of the client. The text in parentheses is t
 - The gate does not accept opaque access tokens, and it does not use token introspection.
 - The gate cannot revoke an access token before its `exp`. A token lives 1 hour or less.
 - Microsoft Entra ID and Google cannot give access tokens for programs that the gate accepts.
-- The address of a client comes from `X-Forwarded-For` when a proxy sends it. A client that can reach ComfyUI without the proxy can change that header, and so avoid the wait.
+- With no trusted proxies, the address of a client is the first entry of `X-Forwarded-For` when a request has it. A client that can reach ComfyUI without the proxy can change that header, and so avoid the wait. Set `COMFYUI_CURU_AUTH_TRUSTED_PROXIES` to stop this.
 
 ## Technical notes
 
@@ -298,6 +321,7 @@ Decisions:
 - [ADR-008](project-management/ADRs/ADR-008-oidc-access-tokens-on-the-bearer-path.md): access tokens on the Bearer path, and how they count in the wait.
 - [ADR-009](project-management/ADRs/ADR-009-a-module-in-the-comfyui-page-acts-on-a-gate-rejection.md): a script in the ComfyUI page sends the tab to the login page.
 - [ADR-010](project-management/ADRs/ADR-010-the-session-cookie-name-holds-the-listening-port.md): the name of the session cookie holds the port of ComfyUI.
+- [ADR-011](project-management/ADRs/ADR-011-trusted-proxies-name-the-client-address.md): the trusted proxies decide which entry of `X-Forwarded-For` is the client.
 
 The credential scheme comes from [curu](https://github.com/darth-veitcher/curu). The licence is MIT, see [LICENSE](LICENSE).
 
@@ -333,6 +357,7 @@ The quality gates are `uv run ruff check`, `uv run ruff format`, `uv run ty chec
 | Audience (`aud`) | The value in `aud` that names who a token is for. For an ID token, it must hold the client id. For an access token, it must hold `COMFYUI_CURU_AUTH_OIDC_AUDIENCE`. |
 | `azp` | The authorized party: the client that the identity provider gave the ID token to. |
 | Caller | One client address, as the wait counts it. |
+| CIDR network | A range of IP addresses, written as an address and a prefix length, for example `10.89.1.0/24`. |
 | Claim | One named value in a token, for example `sub` or `email`. |
 | `client_credentials` grant | A token request in which a program sends its client id and secret, with no person. |
 | `client_id`, `cid` | Other names of the client id in a token, for some identity providers. |
@@ -360,6 +385,7 @@ The quality gates are `uv run ruff check`, `uv run ruff format`, `uv run ty chec
 | Redirect URI | The URL of the gate that the identity provider sends the browser back to. |
 | Reverse proxy | A server in front of ComfyUI that gets each request from the browser and sends it on to ComfyUI, for example Traefik, Caddy or nginx. |
 | Scope | A name for the data or the access that a login or a program asks for, for example `email`. A token holds its scopes in `scope` or `scp`. |
+| Trusted proxy | A reverse proxy whose `X-Forwarded-For` header the gate reads, because it is on `COMFYUI_CURU_AUTH_TRUSTED_PROXIES`. |
 | Session cookie | The `curu_auth_<port>` cookie that keeps a browser logged in to one ComfyUI instance for 30 days. |
 | `scp` | Another name of the scope claim, for some identity providers. It can be a list. |
 | `sub` | The subject claim: a fixed id of the person at the identity provider. |

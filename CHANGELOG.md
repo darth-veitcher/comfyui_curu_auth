@@ -9,11 +9,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
-- `COMFYUI_CURU_AUTH_OIDC_RESOLVE` gives the IP address of a host name of the
-  identity provider, for a host whose DNS does not know the name.
-  `COMFYUI_CURU_AUTH_OIDC_CA_FILE` adds CA certificates, for an issuer with a
-  certificate of a private CA. Both apply only to the requests of the gate to
-  the identity provider. TLS still checks the name of the URL.
+- `COMFYUI_CURU_AUTH_TRUSTED_PROXIES` gives the addresses and networks of the
+  reverse proxies in front of ComfyUI. Only for a request from such a proxy,
+  the gate reads `X-Forwarded-For`, and takes the right-most entry that is not
+  a trusted proxy as the client. So each client behind the proxy gets its own
+  wait, and a client that avoids the proxy cannot choose its address. With no
+  setting (the default), nothing changes.
 
 <!-- version list -->
 
