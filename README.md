@@ -16,6 +16,7 @@ comfyui_curu_auth is a ComfyUI custom node that puts a credential in front of yo
 | Let a program send an access token | `COMFYUI_CURU_AUTH_OIDC_AUDIENCE` | [Let a program call ComfyUI with an access token](#let-a-program-call-comfyui-with-an-access-token) |
 | Log in with your identity provider | The four connection settings and an allowlist | [Log in through your identity provider](#log-in-through-your-identity-provider) |
 | Log in with your identity provider at more than one address | A list in `COMFYUI_CURU_AUTH_OIDC_REDIRECT_URI` | [Log in through your identity provider at more than one address](#log-in-through-your-identity-provider-at-more-than-one-address) |
+| Reach an identity provider that the DNS or the trust of the host does not know | `COMFYUI_CURU_AUTH_OIDC_RESOLVE`, `COMFYUI_CURU_AUTH_OIDC_CA_FILE` | [Reach an identity provider on a private network](#reach-an-identity-provider-on-a-private-network) |
 | Choose HTTPS or plain HTTP | `X-Forwarded-Proto: https` at your proxy | [Use HTTPS or plain HTTP](#use-https-or-plain-http) |
 | Understand a 429 | Wait for `Retry-After` | [Recover from repeated failures](#recover-from-repeated-failures) |
 | Block attackers at the firewall | `contrib/fail2ban`, `contrib/crowdsec` | [Block repeat offenders at the firewall](#block-repeat-offenders-at-the-firewall) |
@@ -195,6 +196,29 @@ The same check applies to the `/ws` handshake. A refused token gets HTTP 401 and
 When the gate has no keys of the identity provider, because it could not read them one time, a token gets HTTP 503. When a later read fails, the gate keeps the old keys. A 503 is not a failure of the caller: it does not count, and the log line is not an `authentication failure` line.
 
 The gate keeps the keys of the issuer in memory. It reads them again for an unknown key, at most one time in 60 seconds. It also reads them again when they are 1 hour old, so a key that the identity provider removed stops working. [Connect an identity provider](docs/oidc-providers.md#let-programs-send-access-tokens) says which providers can give such tokens.
+
+## Reach an identity provider on a private network
+
+Do this when the identity provider is on a private network, and the computer of ComfyUI cannot reach it as it is. Two examples:
+
+- The DNS of the computer does not know the name of the issuer. For example, only the DNS of the LAN knows it, and a VPN gives the computer another DNS.
+- The issuer has a certificate of a private CA, for example the local CA of Caddy.
+
+The two settings apply only to the requests of the gate to the identity provider: the discovery document, the keys and the token exchange. The rest of ComfyUI and the browser do not use them.
+
+| Setting | Meaning | Default |
+|---|---|---|
+| `COMFYUI_CURU_AUTH_OIDC_RESOLVE` | The IP address of each host name, as `<host>=<IP address>`, with a comma or a space between the entries. | empty: the DNS of the computer |
+| `COMFYUI_CURU_AUTH_OIDC_CA_FILE` | The path of a PEM file with one or more CA certificates. The gate trusts them and the CAs of the system. | empty: the CAs of the system |
+
+```bash
+export COMFYUI_CURU_AUTH_OIDC_RESOLVE="auth.example.lan=192.168.1.117"
+export COMFYUI_CURU_AUTH_OIDC_CA_FILE="/etc/comfyui/idp-root.crt"
+```
+
+The URL keeps the host name, so TLS checks the certificate against that name, not against the address. Restart ComfyUI after a change.
+
+An entry that is not a host name and an IP address, or a CA file that the gate cannot read, is a setup error. The console then shows `the settings of the identity provider are not used:`, and the gate uses the DNS and the CAs of the system. The gate stays on.
 
 ## Use HTTPS or plain HTTP
 

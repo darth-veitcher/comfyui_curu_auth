@@ -37,6 +37,7 @@ NOT_RUN = {
 _SETTINGS_TEST = "test_each_setting_of_the_readme_is_read"
 _CREDENTIAL_TEST = "test_the_credential_example_makes_a_credential"
 _REDIRECT_URIS_TEST = "test_the_list_of_redirect_uris_gives_two_uris"
+_RESOLVE_TEST = "test_the_resolve_example_gives_one_address"
 
 #: A text that only one block holds -> the test below that runs that block.
 RUN = {
@@ -44,6 +45,7 @@ RUN = {
     "COMFYUI_CURU_AUTH_OIDC_ISSUER_URL=": _SETTINGS_TEST,
     "COMFYUI_CURU_AUTH_OIDC_ALLOWED_SUBJECTS=": _SETTINGS_TEST,
     'COMFYUI_CURU_AUTH_OIDC_REDIRECT_URI="http://': _REDIRECT_URIS_TEST,
+    "COMFYUI_CURU_AUTH_OIDC_RESOLVE=": _RESOLVE_TEST,
 }
 
 
@@ -88,6 +90,18 @@ def test_the_list_of_redirect_uris_gives_two_uris() -> None:
     assert config is not None
     assert len(config.redirect_uris) == 2
     assert config.redirect_uri == match.group(1).split(",")[0]
+
+
+def test_the_resolve_example_gives_one_address() -> None:
+    """The example of a private network passes the setting check. Its CA file
+    is a path on the computer of the reader, so the test does not read it."""
+    from oidc import resolve_oidc_network
+
+    match = re.search(r'COMFYUI_CURU_AUTH_OIDC_RESOLVE="([^"]+)"', README)
+    assert match is not None
+    network = resolve_oidc_network(resolve=match.group(1), ca_file=None)
+
+    assert len(network.addresses) == 1
 
 
 def test_each_setting_of_the_readme_is_read() -> None:

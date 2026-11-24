@@ -50,6 +50,8 @@ Read the `sub` of a person at the identity provider. The sections for rauthy, Au
 | The admin interface shows the `id` of each user. | Provider documentation |
 | rauthy reads its bootstrap files only at its first start. | Provider documentation |
 
+When rauthy is behind a reverse proxy with a private CA, and the computer of ComfyUI cannot resolve its name, set `COMFYUI_CURU_AUTH_OIDC_RESOLVE` and `COMFYUI_CURU_AUTH_OIDC_CA_FILE`. The [README](../README.md#reach-an-identity-provider-on-a-private-network) gives the settings.
+
 ## Use Authentik
 
 | Fact | Source |
