@@ -55,9 +55,11 @@ try:
         LOGIN_PATH,
         RateLimiter,
         SessionStore,
+        TrustedProxyError,
         build_gate_middleware,
         build_login_routes,
         resolve_persistent_credential,
+        resolve_trusted_proxies,
     )
     from .oidc import (  # ty: ignore[unresolved-import]  # same reasoning
         OIDC_CALLBACK_PATH,
@@ -112,6 +114,24 @@ if server is not None:
     # One shared instance for every path -- a client backed off on one
     # (e.g. hammering the Bearer header) is backed off on the others too.
     _rate_limiter = RateLimiter()
+
+    # Opt-in: the proxies whose X-Forwarded-For names the client. Empty (the
+    # default) keeps the first entry of the header. A bad entry is logged,
+    # and no proxy is trusted; the gate stays on (constitution III).
+    try:
+        _trusted_proxies = resolve_trusted_proxies(
+            os.environ.get("COMFYUI_CURU_AUTH_TRUSTED_PROXIES")
+        )
+    except TrustedProxyError as _error:
+        logging.getLogger("comfyui_curu_auth").error("comfyui_curu_auth: %s", _error)
+        print(f"comfyui-curu-auth: {_error}", flush=True)
+        _trusted_proxies = ()
+    if _trusted_proxies:
+        print(
+            "Trusted proxies (X-Forwarded-For names the client): "
+            + ", ".join(str(network) for network in _trusted_proxies),
+            flush=True,
+        )
 
     # How the gate reaches the identity provider: a set address for a host
     # name, and more CA certificates. Both are optional. A bad value is
@@ -187,6 +207,7 @@ if server is not None:
             rate_limiter=_rate_limiter,
             public_paths=_public_paths,
             token_check=_token_check,
+            trusted_proxies=_trusted_proxies,
         )
     )
     _login_get, _login_post = build_login_routes(
@@ -194,6 +215,7 @@ if server is not None:
         sessions=_sessions,
         rate_limiter=_rate_limiter,
         oidc_start_path=OIDC_START_PATH if _oidc_config is not None else None,
+        trusted_proxies=_trusted_proxies,
     )
     _app.router.add_get(LOGIN_PATH, _login_get)
     _app.router.add_post(LOGIN_PATH, _login_post)
@@ -206,6 +228,7 @@ if server is not None:
             sessions=_sessions,
             store=_oidc_store,
             rate_limiter=_rate_limiter,
+            trusted_proxies=_trusted_proxies,
         )
         _app.router.add_get(OIDC_START_PATH, _oidc_start)
         _app.router.add_get(OIDC_CALLBACK_PATH, _oidc_callback)

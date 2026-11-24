@@ -11,6 +11,7 @@ hermetic ``pytest`` suite at all, with no real ComfyUI process needed.
 from __future__ import annotations
 
 import contextlib
+import ipaddress
 import logging
 import secrets
 import time
@@ -292,6 +293,7 @@ def build_gate_middleware(
     rate_limiter: RateLimiter | None = None,
     public_paths: frozenset[str] | set[str] | None = None,
     token_check: Callable[[str], Awaitable[str | None]] | None = None,
+    trusted_proxies: tuple[IPNetwork, ...] = (),
 ) -> Middleware:
     """Return an aiohttp ``@web.middleware`` function that rejects any
     request lacking ``credential`` -- as ``Authorization: Bearer
@@ -450,7 +452,7 @@ def build_gate_middleware(
         ):
             return await handler(request)
 
-        key = client_key(request)
+        key = client_key(request, trusted_proxies=trusted_proxies)
         supplied_header_value = request.headers.get("Authorization", "")
         try:
             supplied_header = supplied_header_value.encode("latin-1")
@@ -888,33 +890,117 @@ def _render_login_page(
     )
 
 
-def client_key(request: web.Request) -> str:
+#: The environment variable that names the trusted proxies. Its name is in
+#: each setup error, so the operator knows which setting to fix.
+TRUSTED_PROXIES_SETTING = "COMFYUI_CURU_AUTH_TRUSTED_PROXIES"
+
+IPNetwork = ipaddress.IPv4Network | ipaddress.IPv6Network
+IPAddress = ipaddress.IPv4Address | ipaddress.IPv6Address
+
+
+class TrustedProxyError(ValueError):
+    """The trusted-proxy setting has an entry that is not an address or a
+    network. ``__init__.py`` logs it and trusts no proxy (constitution III:
+    the gate stays on)."""
+
+
+def resolve_trusted_proxies(setting: str | None) -> tuple[IPNetwork, ...]:
+    """Parse :data:`TRUSTED_PROXIES_SETTING`: addresses and CIDR networks,
+    with a comma or a space between them. ``None`` or blank trusts no proxy
+    (the default). A network with host bits set (``10.0.0.1/24``) is an
+    error, not a silent widening, so a typo cannot trust more than meant.
+    """
+
+    networks: list[IPNetwork] = []
+    for entry in (setting or "").replace(",", " ").split():
+        try:
+            networks.append(ipaddress.ip_network(entry, strict=True))
+        except ValueError as exc:
+            raise TrustedProxyError(
+                f"{TRUSTED_PROXIES_SETTING}: {entry!r} is not an IP address "
+                f"or a network ({exc}); no proxy is trusted"
+            ) from exc
+    return tuple(networks)
+
+
+def _parse_address(text: str) -> IPAddress | None:
+    """One hop of ``X-Forwarded-For`` or the peer: an address, optionally
+    with a port (``203.0.113.7:51234``, ``[2001:db8::1]:443``). An
+    IPv4-mapped IPv6 address becomes its IPv4 address, so a dual-stack
+    listener matches an IPv4 network. ``None`` when it is not an address."""
+
+    text = text.strip()
+    if text.startswith("[") and "]" in text:
+        text = text[1 : text.index("]")]
+    elif text.count(":") == 1:
+        text = text.split(":", 1)[0]
+    try:
+        address = ipaddress.ip_address(text)
+    except ValueError:
+        return None
+    if isinstance(address, ipaddress.IPv6Address) and address.ipv4_mapped:
+        return address.ipv4_mapped
+    return address
+
+
+def _is_trusted(address: IPAddress, trusted_proxies: tuple[IPNetwork, ...]) -> bool:
+    return any(address in network for network in trusted_proxies)
+
+
+def client_key(
+    request: web.Request, *, trusted_proxies: tuple[IPNetwork, ...] = ()
+) -> str:
     """The identity :class:`RateLimiter` keys backoff on for one request.
 
-    Prefers ``X-Forwarded-For``'s first (left-most, closest-to-client)
-    entry over ``request.remote`` -- verified live against a real RunPod
-    deployment (Cloudflare fronting a ``proxy.runpod.net`` origin) that
+    With no ``trusted_proxies`` (the default), prefers
+    ``X-Forwarded-For``'s first (left-most, closest-to-client) entry over
+    ``request.remote`` -- verified live against a real RunPod deployment
+    (Cloudflare fronting a ``proxy.runpod.net`` origin) that
     ``request.remote`` is the *proxy's own* connecting address there, not
     a stable per-client value, which silently defeated the backoff
     entirely (every request looked like a different, fresh client).
     Falls back to ``request.remote`` when the header is absent (a direct
     connection, e.g. this gate reached with no reverse proxy in front at
-    all).
+    all). That default is best-effort: a client with direct network access
+    to this gate's own origin can forge the header to evade per-client
+    backoff.
 
-    This is honestly best-effort, not a hard security boundary: a client
-    with direct network access to this gate's own origin (bypassing
-    whatever proxy is in front) could forge this header to evade
-    per-client backoff. That is an acceptable trade here -- as
-    :class:`RateLimiter`'s own docstring already states, the credential's
-    256 bits of entropy is the actual protection against brute force;
-    this key only decides whose request volume gets throttled, not
-    whether the credential can be guessed.
+    With ``trusted_proxies`` (:func:`resolve_trusted_proxies`), the header
+    counts only when the peer itself is a trusted proxy. The gate then
+    walks ``X-Forwarded-For`` from the right -- each proxy appends the
+    address it saw -- and takes the first entry that is not a trusted
+    proxy. Entries to its left are what the client wrote, so a client
+    cannot choose its key. An entry that is not an address ends the walk:
+    the key is then the last trusted hop, never a text the client chose.
+    A peer that is not trusted is the client, whatever the header says.
+
+    Either way the key decides whose request volume gets throttled, not
+    whether the credential can be guessed: as :class:`RateLimiter`'s own
+    docstring states, the credential's 256 bits of entropy is the actual
+    protection against brute force.
     """
 
     forwarded_for = request.headers.get("X-Forwarded-For", "")
-    if forwarded_for:
-        return forwarded_for.split(",")[0].strip()
-    return request.remote or "unknown"
+    if not trusted_proxies:
+        if forwarded_for:
+            return forwarded_for.split(",")[0].strip()
+        return request.remote or "unknown"
+
+    remote = request.remote
+    if remote is None:
+        return "unknown"
+    peer = _parse_address(remote)
+    if peer is None or not _is_trusted(peer, trusted_proxies):
+        return remote
+    key = str(peer)
+    for entry in reversed(forwarded_for.split(",") if forwarded_for else []):
+        hop = _parse_address(entry)
+        if hop is None:
+            break
+        key = str(hop)
+        if not _is_trusted(hop, trusted_proxies):
+            break
+    return key
 
 
 def build_login_routes(
@@ -923,6 +1009,7 @@ def build_login_routes(
     sessions: SessionStore,
     rate_limiter: RateLimiter | None = None,
     oidc_start_path: str | None = None,
+    trusted_proxies: tuple[IPNetwork, ...] = (),
 ) -> tuple[Handler, Handler]:
     """Return ``(login_get, login_post)`` handlers for :data:`LOGIN_PATH` --
     a minimal HTML form letting a human paste the same credential
@@ -965,7 +1052,7 @@ def build_login_routes(
         )
 
     async def login_post(request: web.Request) -> web.StreamResponse:
-        key = client_key(request)
+        key = client_key(request, trusted_proxies=trusted_proxies)
         retry_after = limiter.seconds_until_retry(key)
         if retry_after > 0:
             # The styled login page, not a bare JSON body: this route is
@@ -1032,14 +1119,17 @@ __all__ = [
     "LOGIN_PATH",
     "REJECTION_HEADER",
     "REJECTION_VALUE",
+    "TRUSTED_PROXIES_SETTING",
     "RateLimiter",
     "SessionStore",
+    "TrustedProxyError",
     "browser_used_https",
     "build_gate_middleware",
     "build_login_routes",
     "client_key",
     "generate_credential",
     "request_origin",
+    "resolve_trusted_proxies",
     "session_cookie_name",
     "set_session_cookie",
 ]
