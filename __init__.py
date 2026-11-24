@@ -67,7 +67,9 @@ try:
         build_oidc_routes,
         build_token_check,
         resolve_oidc_config,
+        resolve_oidc_network,
         resolve_resource_server_config,
+        use_oidc_network,
     )
     # only importable inside a real ComfyUI installation -- never present in
     # this repo's own environment, so `ty check` cannot resolve it either.
@@ -110,6 +112,20 @@ if server is not None:
     # One shared instance for every path -- a client backed off on one
     # (e.g. hammering the Bearer header) is backed off on the others too.
     _rate_limiter = RateLimiter()
+
+    # How the gate reaches the identity provider: a set address for a host
+    # name, and more CA certificates. Both are optional. A bad value is
+    # logged, and the gate uses the DNS and the trust of the system.
+    try:
+        use_oidc_network(
+            resolve_oidc_network(
+                resolve=os.environ.get("COMFYUI_CURU_AUTH_OIDC_RESOLVE"),
+                ca_file=os.environ.get("COMFYUI_CURU_AUTH_OIDC_CA_FILE"),
+            )
+        )
+    except OIDCConfigError as _error:
+        logging.getLogger("comfyui_curu_auth").error("comfyui_curu_auth: %s", _error)
+        print(f"comfyui-curu-auth: {_error}", flush=True)
 
     # Entirely opt-in (spec 002 FR-001/FR-002/FR-009): resolve_oidc_config
     # returns None unless all four are real, non-empty values -- a

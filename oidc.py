@@ -29,18 +29,23 @@ from __future__ import annotations
 import asyncio
 import base64
 import hashlib
+import ipaddress
 import json
 import logging
 import secrets
+import socket
+import ssl
 import time
 import warnings
 from collections.abc import Awaitable, Callable
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any, NoReturn
 from urllib.parse import urlencode, urlsplit
 
 import aiohttp
 from aiohttp import web
+from aiohttp.abc import AbstractResolver
+from aiohttp.resolver import DefaultResolver
 from aiohttp.typedefs import Handler
 
 if TYPE_CHECKING:
@@ -358,6 +363,130 @@ def discovery_url(issuer_url: str) -> str:
     return issuer_url.rstrip("/") + "/.well-known/openid-configuration"
 
 
+@dataclass(frozen=True)
+class OIDCNetwork:
+    """How the gate reaches the identity provider.
+
+    ``addresses`` gives the IP address of a host name, for a host whose DNS
+    does not know the name of the issuer (``COMFYUI_CURU_AUTH_OIDC_RESOLVE``).
+    The URL keeps the name, so TLS checks the certificate against the name.
+    ``ca_file`` adds CA certificates to the trust of the system, for an issuer
+    with a certificate of a private CA (``COMFYUI_CURU_AUTH_OIDC_CA_FILE``).
+
+    Both apply only to the requests of the gate to the identity provider:
+    the discovery document, the keys and the token exchange. The default
+    has neither, and the gate then uses the DNS and the trust of the system.
+    """
+
+    addresses: tuple[tuple[str, str], ...] = ()
+    ca_file: str | None = None
+    _ssl_context: ssl.SSLContext | None = field(default=None, compare=False, repr=False)
+
+    def session(self) -> aiohttp.ClientSession:
+        """A new client session that uses these settings."""
+
+        if not self.addresses and self._ssl_context is None:
+            return aiohttp.ClientSession()
+        connector = aiohttp.TCPConnector(
+            ssl=self._ssl_context if self._ssl_context is not None else True,
+            resolver=_SetAddressResolver(dict(self.addresses))
+            if self.addresses
+            else None,
+        )
+        return aiohttp.ClientSession(connector=connector)
+
+
+class _SetAddressResolver(AbstractResolver):
+    """Gives the set address of a host name, and asks the DNS for each other
+    name."""
+
+    def __init__(self, addresses: dict[str, str]) -> None:
+        self._addresses = addresses
+        self._default: AbstractResolver = DefaultResolver()
+
+    async def resolve(
+        self, host: str, port: int = 0, family: socket.AddressFamily = socket.AF_INET
+    ) -> list[Any]:
+        address = self._addresses.get(host.lower().rstrip("."))
+        if address is None:
+            return await self._default.resolve(host, port, family)
+        version = ipaddress.ip_address(address).version
+        return [
+            {
+                "hostname": host,
+                "host": address,
+                "port": port,
+                "family": socket.AF_INET6 if version == 6 else socket.AF_INET,
+                "proto": 0,
+                "flags": socket.AI_NUMERICHOST,
+            }
+        ]
+
+    async def close(self) -> None:
+        await self._default.close()
+
+
+def resolve_oidc_network(*, resolve: str | None, ca_file: str | None) -> OIDCNetwork:
+    """The :class:`OIDCNetwork` of the two settings.
+
+    ``resolve`` is a list of ``<host>=<IP address>`` entries, with a comma or
+    a space between them. ``ca_file`` is the path of a PEM file with one or
+    more CA certificates. An empty value counts as not set. Raises
+    :class:`OIDCConfigError` for an entry that is not a host name and an IP
+    address, and for a CA file that the gate cannot read or that holds no
+    certificate. ``__init__.py`` then writes the error and uses the default.
+    """
+
+    addresses: dict[str, str] = {}
+    for entry in _split(resolve):
+        host, _, address = entry.partition("=")
+        host = host.strip().lower().rstrip(".")
+        try:
+            ipaddress.ip_address(address.strip())
+        except ValueError:
+            host = ""
+        if not host:
+            raise OIDCConfigError(
+                "the settings of the identity provider are not used: each entry "
+                "of COMFYUI_CURU_AUTH_OIDC_RESOLVE must be <host>=<IP address>; "
+                f"got {entry!r}"
+            )
+        addresses[host] = address.strip()
+    path = (ca_file or "").strip() or None
+    context = None
+    if path is not None:
+        context = ssl.create_default_context()
+        try:
+            context.load_verify_locations(cafile=path)
+        except (OSError, ssl.SSLError) as exc:
+            raise OIDCConfigError(
+                "the settings of the identity provider are not used: "
+                f"COMFYUI_CURU_AUTH_OIDC_CA_FILE {path!r} holds no CA certificate "
+                f"that the gate can read ({exc.__class__.__name__})"
+            ) from exc
+    return OIDCNetwork(
+        addresses=tuple(addresses.items()), ca_file=path, _ssl_context=context
+    )
+
+
+#: The network of each request of the gate to the identity provider.
+#: ``__init__.py`` sets it one time, at the start (:func:`use_oidc_network`).
+_network = OIDCNetwork()
+
+
+def use_oidc_network(network: OIDCNetwork) -> None:
+    """Use ``network`` for each later request to the identity provider."""
+
+    global _network
+    _network = network
+
+
+def current_oidc_network() -> OIDCNetwork:
+    """The network that the requests to the identity provider use now."""
+
+    return _network
+
+
 async def fetch_discovery_document(
     issuer_url: str, *, timeout: float = 10.0
 ) -> dict[str, Any]:
@@ -378,7 +507,7 @@ async def fetch_discovery_document(
     url = discovery_url(issuer_url)
     try:
         async with (
-            aiohttp.ClientSession() as session,
+            _network.session() as session,
             session.get(
                 url,
                 timeout=aiohttp.ClientTimeout(total=timeout),
@@ -676,7 +805,7 @@ async def _fetch_jwks(jwks_uri: str, *, timeout: float) -> KeySet:
 
     try:
         async with (
-            aiohttp.ClientSession() as session,
+            _network.session() as session,
             session.get(
                 jwks_uri,
                 timeout=aiohttp.ClientTimeout(total=timeout),
@@ -1058,7 +1187,7 @@ async def _exchange_code_for_token(
     }
     try:
         async with (
-            aiohttp.ClientSession() as session,
+            _network.session() as session,
             session.post(
                 discovery["token_endpoint"],
                 data=data,
@@ -1273,19 +1402,23 @@ __all__ = [
     "OIDCConfig",
     "OIDCConfigError",
     "OIDCDiscoveryError",
+    "OIDCNetwork",
     "OIDCTokenVerificationError",
     "ResourceServerConfig",
     "build_authorization_url",
     "build_oidc_routes",
     "build_token_check",
     "check_token_algorithm",
+    "current_oidc_network",
     "discovery_url",
     "fetch_discovery_document",
     "is_safe_url",
     "read_token_header",
     "resolve_oidc_config",
+    "resolve_oidc_network",
     "resolve_resource_server_config",
     "select_signing_key",
+    "use_oidc_network",
     "verify_access_token",
     "verify_id_token",
 ]
